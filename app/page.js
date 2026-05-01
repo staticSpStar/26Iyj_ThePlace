@@ -41,6 +41,8 @@ export default function Home() {
   const [animateBars, setAnimateBars] = useState(false);
   const [currentUserEmail, setCurrentUserEmail] = useState(null);
   const [showFullLeaderboard, setShowFullLeaderboard] = useState(false);
+  const [showHelpModal, setShowHelpModal] = useState(false);
+
 
   const colorRef = useRef('#ff0000');
   const isPaintModeRef = useRef(false);
@@ -682,6 +684,14 @@ export default function Home() {
           🏆
         </button>
 
+        <button
+            onClick={() => setShowHelpModal(true)}
+            className="w-12 h-12 bg-white hover:bg-gray-100 text-black border border-gray-200 rounded-full shadow-md font-black transition-colors flex items-center justify-center text-xl"
+            title="사용 설명"
+        >
+          ?
+        </button>
+
         {isAdmin && (
             <button
                 onClick={() => openLeaderboard("admin")}
@@ -743,7 +753,7 @@ export default function Home() {
             <h2 className="mb-5 text-gray-800">The Place에 오신 것을 환영합니다. 아래 사항들을 읽고, The Place를 즐겨주시면 좋겠습니다.</h2>
             <ul className="list-disc pl-5 space-y-3 mb-8 text-gray-600">
               <li>The Place는 SASA의 학생들이 <a className="underline font-bold">자유롭게</a> SASA를 색칠할 수 있는 온라인 공간입니다. SASA의 공간에 여러분들의 용기, 도전, 꿈을 마음껏 표현해주세요.</li>
-              <li>그러나 The Place는 접속한 모두가 볼 수 있는 <a className="underline font-bold">공용 캔버스</a>이기도 합니다. 이 사실에 유념하여 이용해주세요.</li>
+              <li>그러나 The Place는 접속한 모두가 볼 수 있는 <a className="underline font-bold">공용 캔버스</a>이기도 합니다. 이 사실에 유념하여 이용해주세요. 관리자는 부적절한 그림을 삭제할 수 있습니다!</li>
               <li>모두 확인하였다면, 아래 '확인했습니다' 버튼을 누르고 The Place 이용을 시작해주세요.</li>
             </ul>
             <button onClick={() => setShowModal(false)} className="w-full py-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-600 transition-colors shadow-sm">
@@ -751,6 +761,122 @@ export default function Home() {
             </button>
           </div>
         </div>
+      )}
+
+      {showHelpModal && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl shadow-2xl w-[95vw] max-w-5xl max-h-[85vh] overflow-hidden text-black flex flex-col">              <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+                <div>
+                  <h2 className="text-2xl sm:text-3xl font-black tracking-tight">
+                    이용 안내
+                  </h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    The Place
+                  </p>
+                </div>
+
+                <button
+                    onClick={() => setShowHelpModal(false)}
+                    className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 font-bold shrink-0"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto flex-1 min-h-0 space-y-7">
+                <section>
+                  <h3 className="text-xl font-black mb-3 flex items-center gap-2">
+                    🎨 그리기
+                  </h3>
+
+                  <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
+                    <li>
+                      화면 하단의 <strong>그리기</strong> 버튼을 눌러 그리기를 시작하세요.
+                      팔레트에 있는 다양한 색을 선택해 학교 공간 위에 그림을 그릴 수 있습니다.
+                    </li>
+                    <li>
+                      원하는 위치를 클릭하거나 드래그하면 픽셀 단위로 색을 칠할 수 있습니다.
+                    </li>
+                    <li>
+                      그리기가 끝나면 <strong>그리기 완료</strong> 버튼을 눌러 그림을 학교 공간 위에 게시하세요.
+                    </li>
+                    <li>
+                      <strong>그리기 완료</strong> 버튼을 누르지 않고 팔레트의 <strong>✕</strong> 버튼을 누르면,
+                      그리던 그림은 저장되지 않고 사라집니다.
+                    </li>
+                    <li>
+                      1층이 아닌 층에서는 배경의 흰색 영역 위에는 그림을 그릴 수 없습니다.
+                      학교 공간이 있는 부분 위에만 색칠할 수 있습니다.
+                    </li>
+                  </ul>
+                </section>
+
+                <section>
+                  <h3 className="text-xl font-black mb-3 flex items-center gap-2">
+                    🏫 캔버스
+                  </h3>
+
+                  <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
+                    <li>
+                      The Place의 캔버스는 <strong>학교 공간</strong>입니다.
+                    </li>
+                    <li>
+                      마우스 휠로 확대하거나 축소할 수 있고, 화면을 드래그해 수평적인 이동을 할 수 있습니다.
+                    </li>
+                    <li>
+                      화면 왼쪽 위의 층 선택 버튼을 눌러 <strong>1층부터 5층까지</strong> 수직적으로 이동할 수 있습니다.
+                    </li>
+                    <li>
+                      키보드 단축키도 사용할 수 있습니다.
+                      <strong> Q</strong> 키를 누르면 아래층으로, <strong>E</strong> 키를 누르면 위층으로 이동합니다.
+                    </li>
+                  </ul>
+                </section>
+
+                <section>
+                  <h3 className="text-xl font-black mb-3 flex items-center gap-2">
+                    🏆 리더보드
+                  </h3>
+
+                  <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
+                    <li>
+                      화면 오른쪽 위의 <strong>🏆</strong> 플로팅 버튼을 눌러 리더보드를 확인할 수 있습니다.
+                    </li>
+                    <li>
+                      리더보드에서는 <strong>개인별 픽셀 수</strong>, <strong>반별 픽셀 수</strong>,
+                      <strong> 학년별 픽셀 수</strong>, <strong>층별 픽셀 수</strong> 순위를 볼 수 있습니다.
+                    </li>
+                    <li>
+                      개인별 순위에서는 상위 10명과 자신의 순위를 먼저 확인할 수 있고,
+                      <strong> 전체 보기</strong> 버튼을 누르면 전체 순위를 볼 수 있습니다.
+                    </li>
+                    <li>
+                      리더보드 결과에 따라 추후 상품이 증정될 예정입니다.
+                    </li>
+                  </ul>
+                </section>
+
+                <section>
+                  <h3 className="text-xl font-black mb-3 flex items-center gap-2">
+                    ⚠️ 이용 안내
+                  </h3>
+
+                  <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
+                    <li>
+                      The Place는 모두가 함께 보는 공용 캔버스입니다.
+                      다른 사람이 불쾌감을 느낄 수 있는 그림이나 글은 남기지 말아 주세요.
+                    </li>
+                    <li>
+                      관리자는 부적절한 그림을 삭제할 수 있습니다.
+                    </li>
+                    <li>
+                      SASA의 공간에 여러분의 <strong>용기, 도전, 꿈</strong>을 자유롭게 표현해 주세요.
+                    </li>
+                  </ul>
+                </section>
+              </div>
+            </div>
+          </div>
       )}
 
       {leaderboardType && (
@@ -959,7 +1085,7 @@ export default function Home() {
               onClick={savePainting}
               className="px-6 py-2 rounded-full font-bold transition-colors whitespace-nowrap bg-green-500 hover:bg-green-600 text-white shadow"
             >
-              Paint 완료!
+              그리기 완료
             </button>
           )}
 
@@ -968,7 +1094,7 @@ export default function Home() {
               onClick={() => session ? setIsPaintMode(true) : signIn('google')}
               className="px-8 py-2.5 rounded-full font-bold transition-transform hover:scale-105 active:scale-95 whitespace-nowrap bg-blue-500 text-white shadow-md"
             >
-              Paint
+              그리기
             </button>
           )}
 
