@@ -20,18 +20,29 @@ export async function POST(req) {
   }
 
   await dbConnect();
+
   const body = await req.json();
-  const { pixels, floor } = body;
+  const { pixels, floor, paintStartedAt } = body;
 
   if (!pixels || pixels.length === 0) {
     return Response.json({ success: false, error: 'No pixels provided' }, { status: 400 });
   }
 
+  const startedAt = paintStartedAt ? new Date(paintStartedAt) : new Date();
+  const postedAt = new Date();
+
+  const durationMs = postedAt.getTime() - startedAt.getTime();
+  const durationSeconds = Math.floor(durationMs / 1000);
+
   const paintObj = new PaintObject({
     userEmail: session.user.email,
     userName: session.user.name,
     floor: floor || 1,
-    pixels
+    pixels,
+    paintStartedAt: startedAt,
+    postedAt,
+    durationMs,
+    durationSeconds
   });
 
   await paintObj.save();
