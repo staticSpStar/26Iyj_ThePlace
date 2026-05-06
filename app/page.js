@@ -60,6 +60,11 @@ export default function Home() {
   const lastMousePosRef = useRef({ x: 0, y: 0 });
   const draggedRef = useRef(false);
 
+  const pointersRef = useRef(new Map());
+  const isPinchingRef = useRef(false);
+  const pinchStartDistRef = useRef(0);
+  const pinchStartScaleRef = useRef(1);
+
   useEffect(() => { objectsRef.current = objects; }, [objects]);
   useEffect(() => { floorRef.current = floor; }, [floor]);
 
@@ -476,18 +481,62 @@ export default function Home() {
 
   const handlePointerDown = (e) => {
     if (!isImageLoaded) return;
-
-    // Prevent dragging map if clicking on the info tooltip
     if (e.target.closest('.admin-tooltip')) return;
 
-    isDraggingRef.current = true;
-    draggedRef.current = false;
-    lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     canvasRef.current.setPointerCapture(e.pointerId);
+
+    if (pointersRef.current.size === 2 && !isPaintModeRef.current) {
+      isPinchingRef.current = true;
+      isDraggingRef.current = false;
+      const pts = Array.from(pointersRef.current.values());
+      pinchStartDistRef.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchStartScaleRef.current = transformRef.current.scale;
+      return;
+    }
+
+    if (pointersRef.current.size === 1) {
+      isDraggingRef.current = true;
+      draggedRef.current = false;
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+    }
   };
 
   const handlePointerMove = (e) => {
+    if (!isImageLoaded) return;
+    if (!pointersRef.current.has(e.pointerId)) return;
+
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (isPinchingRef.current && pointersRef.current.size === 2) {
+      const pts = Array.from(pointersRef.current.values());
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const scaleFactor = dist / pinchStartDistRef.current;
+      let newScale = Math.min(Math.max(pinchStartScaleRef.current * scaleFactor, 0.001), 50);
+
+      const canvas = canvasRef.current;
+      const rect = canvas.getBoundingClientRect();
+      
+      const cx = (pts[0].x + pts[1].x) / 2 - rect.left;
+      const cy = (pts[0].y + pts[1].y) / 2 - rect.top;
+
+      const { x, y, scale } = transformRef.current;
+      const newX = cx - (cx - x) * (newScale / scale);
+      const newY = cy - (cy - y) * (newScale / scale);
+
+      transformRef.current = clampTransform(newX, newY, newScale);
+      render();
+      return;
+    }
+
     if (isDraggingRef.current) {
+      const dx = e.clientX - lastMousePosRef.current.x;
+      const dy = e.clientY - lastMousePosRef.current.y;
+
+      if (!draggedRef.current && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
+        draggedRef.current = true;
+      }
+
       if (isPaintModeRef.current) {
         const rect = canvasRef.current.getBoundingClientRect();
         const cursorX = e.clientX - rect.left;
@@ -502,29 +551,19 @@ export default function Home() {
           paintPixel(pixelX, pixelY, colorRef.current);
           if (!hoverPixelRef.current || hoverPixelRef.current.x !== pixelX || hoverPixelRef.current.y !== pixelY) {
             hoverPixelRef.current = { x: pixelX, y: pixelY };
-            render();
           }
         }
-        draggedRef.current = true;
-        return;
+      } else {
+        const { x, y, scale } = transformRef.current;
+        transformRef.current = clampTransform(x + dx, y + dy, scale);
       }
-
-      const dx = e.clientX - lastMousePosRef.current.x;
-      const dy = e.clientY - lastMousePosRef.current.y;
-
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
-        draggedRef.current = true;
-      }
-
-      const { x, y, scale } = transformRef.current;
-      transformRef.current = clampTransform(x + dx, y + dy, scale);
+      
       lastMousePosRef.current = { x: e.clientX, y: e.clientY };
       render();
       return;
     }
 
-    if (!isImageLoaded) return;
-
+    // Hover logic for non-dragging state
     const rect = canvasRef.current.getBoundingClientRect();
     const cursorX = e.clientX - rect.left;
     const cursorY = e.clientY - rect.top;
@@ -548,11 +587,27 @@ export default function Home() {
   };
 
   const handlePointerUp = (e) => {
-    if (!isDraggingRef.current || !isImageLoaded) return;
-    isDraggingRef.current = false;
+    if (!isImageLoaded) return;
 
-    if (!draggedRef.current) {
-      // It's a click/tap
+    const wasPinching = isPinchingRef.current;
+    
+    pointersRef.current.delete(e.pointerId);
+    try {
+      canvasRef.current.releasePointerCapture(e.pointerId);
+    } catch(err) {}
+
+    if (pointersRef.current.size < 2) {
+      isPinchingRef.current = false;
+    }
+
+    // If we just finished a pinch, don't do anything else
+    if (wasPinching && !isPinchingRef.current) {
+      isDraggingRef.current = false;
+      return;
+    }
+
+    if (isDraggingRef.current && !draggedRef.current) {
+      // This was a click/tap, not a drag
       const rect = canvasRef.current.getBoundingClientRect();
       const clickX = e.clientX - rect.left;
       const clickY = e.clientY - rect.top;
@@ -580,11 +635,20 @@ export default function Home() {
             if (clickedId) {
               setTooltipPos({ x: e.clientX, y: e.clientY });
             }
-            render();
+          } else {
+            // Deselect if clicking the same object again
+            setSelectedObjectId(null);
+            selectedObjectIdRef.current = null;
           }
+          render();
         }
       }
     }
+
+    if (pointersRef.current.size === 0) {
+      isDraggingRef.current = false;
+    }
+    draggedRef.current = false;
   };
 
   const handleWheel = useCallback((e) => {
@@ -613,32 +677,19 @@ export default function Home() {
     render();
   }, [render, clampTransform, isImageLoaded]);
 
-  const handlePointerOut = () => {
+  const handlePointerOut = (e) => {
+    pointersRef.current.delete(e.pointerId);
+    if (pointersRef.current.size < 2) {
+      isPinchingRef.current = false;
+    }
+    if (pointersRef.current.size === 0) {
+      isDraggingRef.current = false;
+    }
+
     if (hoverPixelRef.current) {
       hoverPixelRef.current = null;
       render();
     }
-  };
-
-  const isWhiteBackgroundPixel = (px, py) => {
-    if (!bgImageRef.current) return false;
-
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = 1;
-    tempCanvas.height = 1;
-
-    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
-
-    tempCtx.drawImage(
-        bgImageRef.current,
-        px, py, 1, 1,
-        0, 0, 1, 1
-    );
-
-    const [r, g, b, a] = tempCtx.getImageData(0, 0, 1, 1).data;
-
-    // 거의 흰색도 흰색으로 처리
-    return a > 0 && r >= 245 && g >= 245 && b >= 245;
   };
 
   const paintPixel = (px, py, paintColor) => {
@@ -1018,8 +1069,9 @@ export default function Home() {
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          onPointerOut={handlePointerOut}
-          className={`absolute top-0 left-0 w-full h-full touch-none ${isPaintMode ? 'cursor-crosshair' : 'cursor-grab'}`}
+          onPointerLeave={handlePointerOut}
+          onPointerCancel={handlePointerOut}
+          className={`absolute top-0 left-0 w-full h-full touch-none ${isPaintMode ? 'cursor-crosshair' : (isDraggingRef.current && !isPaintMode ? 'cursor-grabbing' : 'cursor-grab')}`}
         />
 
         {isAdmin && selectedObjectId && (
@@ -1069,48 +1121,51 @@ export default function Home() {
         )}
 
         {/* Bottom Panel */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-white/95 backdrop-blur shadow-xl border border-gray-200 p-4 rounded-3xl z-20">
+        <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-20 transition-all duration-300 ${isPaintMode ? 'w-[95%] max-w-md' : 'w-auto'}`}>
+          <div className="relative flex items-center justify-center bg-white/90 backdrop-blur-lg shadow-2xl border border-gray-200 rounded-2xl md:rounded-3xl p-3">
+            
+            {!isPaintMode && (
+              <button
+                onClick={() => session ? setIsPaintMode(true) : signIn('google')}
+                className="px-8 py-2.5 rounded-full font-bold transition-transform hover:scale-105 active:scale-95 whitespace-nowrap bg-blue-500 text-white shadow-md"
+              >
+                그리기
+              </button>
+            )}
 
-          {isPaintMode && (
-            <button
-              onClick={() => setIsPaintMode(false)}
-              className="absolute -top-3 -right-3 w-8 h-8 bg-white hover:bg-gray-100 rounded-full flex items-center justify-center font-bold text-gray-600 shadow-md border border-gray-200 transition-colors"
-            >
-              ✕
-            </button>
-          )}
+            {isPaintMode && (
+              <div className="w-full flex flex-col items-center gap-3 animate-in fade-in duration-300">
+                <div className="flex flex-wrap justify-center gap-2 px-1">
+                  {PALETTE.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setColor(c)}
+                      className={`w-7 h-7 rounded-full border-2 transition-transform shadow-sm ${color === c ? 'border-blue-500 scale-125 z-10' : 'border-white hover:scale-110'}`}
+                      style={{ backgroundColor: c }}
+                      aria-label={`Select color ${c}`}
+                    />
+                  ))}
+                </div>
+                {pendingPixels.length > 0 && (
+                  <button
+                    onClick={savePainting}
+                    className="w-full px-6 py-3 rounded-xl font-bold transition-colors whitespace-nowrap bg-green-500 hover:bg-green-600 text-white shadow-lg"
+                  >
+                    그리기 완료!
+                  </button>
+                )}
+              </div>
+            )}
 
-          {isPaintMode && pendingPixels.length > 0 && (
-            <button
-              onClick={savePainting}
-              className="px-6 py-2 rounded-full font-bold transition-colors whitespace-nowrap bg-green-500 hover:bg-green-600 text-white shadow"
-            >
-              그리기 완료
-            </button>
-          )}
-
-          {!isPaintMode && (
-            <button
-              onClick={() => session ? setIsPaintMode(true) : signIn('google')}
-              className="px-8 py-2.5 rounded-full font-bold transition-transform hover:scale-105 active:scale-95 whitespace-nowrap bg-blue-500 text-white shadow-md"
-            >
-              그리기
-            </button>
-          )}
-
-          {isPaintMode && (
-            <div className="flex flex-wrap gap-2 w-[280px] sm:w-[400px] justify-center animate-in fade-in zoom-in duration-200">
-              {PALETTE.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setColor(c)}
-                  className={`w-6 h-6 rounded-full border-2 transition-transform shadow-sm ${color === c ? 'border-gray-400 scale-125 z-10' : 'border-gray-200 hover:scale-110'}`}
-                  style={{ backgroundColor: c }}
-                  aria-label={`Select color ${c}`}
-                />
-              ))}
-            </div>
-          )}
+            {isPaintMode && (
+              <button
+                onClick={() => setIsPaintMode(false)}
+                className="absolute -top-3 -right-3 w-8 h-8 bg-gray-800 text-white hover:bg-black rounded-full flex items-center justify-center font-bold shadow-lg border-2 border-white transition-colors"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
