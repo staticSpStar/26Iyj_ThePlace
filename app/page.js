@@ -407,8 +407,11 @@ export default function Home() {
   };
 
   const setEraserMode = () => {
-    setIsEraserMode(true);
-    isEraserModeRef.current = true;
+    const nextMode = !isEraserModeRef.current;
+
+    setIsEraserMode(nextMode);
+    isEraserModeRef.current = nextMode;
+
     render();
   };
 
