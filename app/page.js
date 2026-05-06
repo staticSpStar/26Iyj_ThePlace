@@ -24,6 +24,7 @@ export default function Home() {
   const imageSizeRef = useRef({ width: 1000, height: 1000 });
 
   const [color, setColorState] = useState(PALETTE[6]);
+  const [customColor, setCustomColor] = useState("#E50000");
   const [isPaintMode, setIsPaintModeState] = useState(false);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
 
@@ -43,7 +44,7 @@ export default function Home() {
   const [showFullLeaderboard, setShowFullLeaderboard] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
 
-  const colorRef = useRef('#ff0000');
+  const colorRef = useRef(PALETTE[6]);
   const isPaintModeRef = useRef(false);
   const hoverPixelRef = useRef(null);
   const animationFrameRef = useRef(null);
@@ -209,108 +210,141 @@ export default function Home() {
     transformRef.current = clampTransform(initX, initY, initScale);
   }, [clampTransform]);
 
-  const render = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !dataCanvasRef.current || !bgImageRef.current) return;
+  const drawInsetPixelMarker = (ctx, px, py, fillColor, scale) => {
+    const whiteBorder = Math.max(0.055, Math.min(0.15, 0.9 / scale));
+    const blackBorder = Math.max(0.055, Math.min(0.13, 0.75 / scale));
 
-    const ctx = canvas.getContext('2d');
-    ctx.imageSmoothingEnabled = false;
+    // 0. 먼저 원래 색을 픽셀 전체에 깔기
+    ctx.globalAlpha = 1.0;
+    ctx.fillStyle = fillColor;
+    ctx.fillRect(px, py, 1, 1);
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // 1. 바깥 흰색 테두리
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
 
-    const { x, y, scale } = transformRef.current;
+    ctx.fillRect(px, py, 1, whiteBorder); // 위
+    ctx.fillRect(px, py + 1 - whiteBorder, 1, whiteBorder); // 아래
+    ctx.fillRect(px, py + whiteBorder, whiteBorder, 1 - whiteBorder * 2); // 왼쪽
+    ctx.fillRect(
+      px + 1 - whiteBorder,
+      py + whiteBorder,
+      whiteBorder,
+      1 - whiteBorder * 2
+    ); // 오른쪽
 
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(scale, scale);
+    // 2. 안쪽 검은색 테두리
+    const blackInset = whiteBorder;
+    const blackSize = 1 - blackInset * 2;
 
-    const { width, height } = imageSizeRef.current;
+    if (blackSize <= 0) return;
 
-    ctx.drawImage(bgImageRef.current, 0, 0, width, height);
-    ctx.drawImage(dataCanvasRef.current, 0, 0);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
 
-    const drawInsetPixelMarker = (ctx, px, py, fillColor, scale) => {
-      const whiteBorder = Math.max(0.055, Math.min(0.15, 0.9 / scale));
-      const blackBorder = Math.max(0.055, Math.min(0.13, 0.75 / scale));
+    ctx.fillRect(px + blackInset, py + blackInset, blackSize, blackBorder); // 위
+    ctx.fillRect(
+      px + blackInset,
+      py + blackInset + blackSize - blackBorder,
+      blackSize,
+      blackBorder
+    ); // 아래
+    ctx.fillRect(
+      px + blackInset,
+      py + blackInset + blackBorder,
+      blackBorder,
+      blackSize - blackBorder * 2
+    ); // 왼쪽
+    ctx.fillRect(
+      px + blackInset + blackSize - blackBorder,
+      py + blackInset + blackBorder,
+      blackBorder,
+      blackSize - blackBorder * 2
+    ); // 오른쪽
 
-      // 1. 픽셀 전체를 흰색으로 채움 = 바깥 흰색 테두리
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-      ctx.fillRect(px, py, 1, 1);
+    // 3. 중앙 원래 색
+    const colorInset = whiteBorder + blackBorder;
+    const colorSize = 1 - colorInset * 2;
 
-      // 2. 안쪽을 검은색으로 채움 = 검은색 테두리
-      const blackInset = whiteBorder;
-      const blackSize = 1 - blackInset * 2;
+    if (colorSize <= 0) return;
 
-      if (blackSize <= 0) return;
+    ctx.fillStyle = fillColor;
+    ctx.fillRect(
+      px + colorInset,
+      py + colorInset,
+      colorSize,
+      colorSize
+    );
+  };
 
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
-      ctx.fillRect(
-        px + blackInset,
-        py + blackInset,
-        blackSize,
-        blackSize
-      );
+    const render = useCallback(() => {
+      const canvas = canvasRef.current;
+      if (!canvas || !dataCanvasRef.current || !bgImageRef.current) return;
 
-      // 3. 더 안쪽을 원래 색으로 채움 = 중앙 색상
-      const colorInset = whiteBorder + blackBorder;
-      const colorSize = 1 - colorInset * 2;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-      if (colorSize <= 0) return;
+      ctx.imageSmoothingEnabled = false;
+      ctx.globalAlpha = 1.0;
 
-      ctx.fillStyle = fillColor;
-      ctx.fillRect(
-        px + colorInset,
-        py + colorInset,
-        colorSize,
-        colorSize
-      );
-    };
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    pendingPixelsRef.current.forEach((p) => {
-      drawInsetPixelMarker(ctx, p.x, p.y, p.color, scale);
-    });
+      const { x, y, scale } = transformRef.current;
 
-    if (selectedObjectIdRef.current) {
-      const obj = objectsRef.current.find((o) => o._id === selectedObjectIdRef.current);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(scale, scale);
 
-      if (obj) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+      const { width, height } = imageSizeRef.current;
 
-        obj.pixels.forEach((p) => {
-          ctx.fillRect(p.x, p.y, 1, 1);
-        });
+      ctx.drawImage(bgImageRef.current, 0, 0, width, height);
+      ctx.drawImage(dataCanvasRef.current, 0, 0);
 
-        ctx.strokeStyle = 'white';
+      pendingPixelsRef.current.forEach((p) => {
+        drawInsetPixelMarker(ctx, p.x, p.y, p.color, scale);
+      });
 
-        const prevLineWidth = ctx.lineWidth;
-        ctx.lineWidth = 2 / scale;
+      if (selectedObjectIdRef.current) {
+        const obj = objectsRef.current.find(
+          (o) => o._id === selectedObjectIdRef.current
+        );
 
-        ctx.beginPath();
+        if (obj) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
 
-        obj.pixels.forEach((p) => {
-          ctx.rect(p.x, p.y, 1, 1);
-        });
+          obj.pixels.forEach((p) => {
+            ctx.fillRect(p.x, p.y, 1, 1);
+          });
 
-        ctx.stroke();
-        ctx.lineWidth = prevLineWidth;
+          ctx.strokeStyle = 'white';
+
+          const prevLineWidth = ctx.lineWidth;
+          ctx.lineWidth = 2 / scale;
+
+          ctx.beginPath();
+
+          obj.pixels.forEach((p) => {
+            ctx.rect(p.x, p.y, 1, 1);
+          });
+
+          ctx.stroke();
+          ctx.lineWidth = prevLineWidth;
+        }
       }
-    }
 
-    if (hoverPixelRef.current) {
-    const { x: hx, y: hy } = hoverPixelRef.current;
+      if (hoverPixelRef.current) {
+        const { x: hx, y: hy } = hoverPixelRef.current;
 
-    if (isPaintModeRef.current) {
-      if (floorRef.current === 1 || !isWhiteBackgroundPixel(hx, hy)) {
-        drawInsetPixelMarker(ctx, hx, hy, colorRef.current, scale);
+        if (isPaintModeRef.current) {
+          if (floorRef.current === 1 || !isWhiteBackgroundPixel(hx, hy)) {
+            drawInsetPixelMarker(ctx, hx, hy, colorRef.current, scale);
+          }
+        } else {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+          ctx.fillRect(hx, hy, 1, 1);
+        }
       }
-    } else {
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-      ctx.fillRect(hx, hy, 1, 1);
-    }
-  }
 
-    ctx.restore();
-  }, [isWhiteBackgroundPixel]);
+      ctx.restore();
+    }, [isWhiteBackgroundPixel]);
 
   const updateHoverPixelFromClient = useCallback((clientX, clientY) => {
     const canvas = canvasRef.current;
@@ -632,9 +666,13 @@ export default function Home() {
 
     canvasRef.current.setPointerCapture(e.pointerId);
 
-    if (pointersRef.current.size === 2 && !isPaintModeRef.current) {
+    if (pointersRef.current.size === 2) {
       isPinchingRef.current = true;
       isDraggingRef.current = false;
+      draggedRef.current = true;
+
+      // 두 손가락 조작 중에는 페인트 커서 제거
+      hoverPixelRef.current = null;
 
       const pts = Array.from(pointersRef.current.values());
 
@@ -644,6 +682,8 @@ export default function Home() {
       );
 
       pinchStartScaleRef.current = transformRef.current.scale;
+
+      render();
       return;
     }
 
@@ -677,8 +717,8 @@ export default function Home() {
       y: e.clientY
     });
 
-    if (isPinchingRef.current && pointersRef.current.size === 2) {
-      const pts = Array.from(pointersRef.current.values());
+    if (isPinchingRef.current && pointersRef.current.size >= 2) {
+      const pts = Array.from(pointersRef.current.values()).slice(0, 2);
 
       const dist = Math.hypot(
           pts[0].x - pts[1].x,
@@ -703,6 +743,9 @@ export default function Home() {
       const newY = cy - (cy - y) * (newScale / scale);
 
       transformRef.current = clampTransform(newX, newY, newScale);
+
+      hoverPixelRef.current = null;
+
       render();
       return;
     }
@@ -719,7 +762,9 @@ export default function Home() {
         const pixel = updateHoverPixelFromClient(e.clientX, e.clientY);
 
         if (pixel) {
-          paintPixel(pixel.x, pixel.y, colorRef.current);
+          paintPixel(pixel.x, pixel.y, colorRef.current, {
+            allowDelete: false
+          });
         }
       } else {
         const { x, y, scale } = transformRef.current;
@@ -824,6 +869,7 @@ export default function Home() {
     const { x, y, scale } = transformRef.current;
 
     if (e.ctrlKey) {
+      // Ctrl + 스크롤: 확대/축소
       const rect = canvas.getBoundingClientRect();
 
       const cursorX = e.clientX - rect.left;
@@ -847,8 +893,23 @@ export default function Home() {
       const newY = cursorY - (cursorY - y) * (newScale / scale);
 
       transformRef.current = clampTransform(newX, newY, newScale);
+    } else if (e.shiftKey) {
+      // Shift + 스크롤: 좌우 이동
+      const scrollAmount = Math.abs(e.deltaY) > Math.abs(e.deltaX)
+          ? e.deltaY
+          : e.deltaX;
+
+      const moveAmount = 30;
+
+      const newX = scrollAmount > 0
+          ? x - moveAmount
+          : x + moveAmount;
+
+      transformRef.current = clampTransform(newX, y, scale);
     } else {
+      // 일반 스크롤: 위아래 이동
       const scrollAmount = 20;
+
       const newY = e.deltaY > 0
           ? y - scrollAmount
           : y + scrollAmount;
@@ -860,7 +921,9 @@ export default function Home() {
   }, [render, clampTransform, isImageLoaded]);
 
   const handlePointerOut = (e) => {
-    pointersRef.current.delete(e.pointerId);
+    if (e?.pointerId != null) {
+      pointersRef.current.delete(e.pointerId);
+    }
 
     if (pointersRef.current.size < 2) {
       isPinchingRef.current = false;
@@ -876,7 +939,9 @@ export default function Home() {
     }
   };
 
-  const paintPixel = (px, py, paintColor) => {
+  const paintPixel = (px, py, paintColor, options = {}) => {
+    const { allowDelete = true } = options;
+
     if (!session) {
       alert('로그인이 필요합니다.');
       return;
@@ -891,7 +956,20 @@ export default function Home() {
     );
 
     if (existingIdx !== -1) {
-      pendingPixelsRef.current[existingIdx].color = paintColor;
+      const existingPixel = pendingPixelsRef.current[existingIdx];
+
+      if (existingPixel.color.toUpperCase() === paintColor.toUpperCase()) {
+        if (allowDelete) {
+          pendingPixelsRef.current.splice(existingIdx, 1);
+        } else {
+          return;
+        }
+      } else {
+        pendingPixelsRef.current[existingIdx] = {
+          ...existingPixel,
+          color: paintColor
+        };
+      }
     } else {
       pendingPixelsRef.current.push({
         x: px,
@@ -1161,7 +1239,7 @@ export default function Home() {
                         팔레트에 있는 다양한 색을 선택해 학교 공간 위에 그림을 그릴 수 있습니다.
                       </li>
                       <li>
-                        원하는 위치를 클릭하거나 드래그하면 픽셀 단위로 색을 칠할 수 있습니다.
+                        원하는 위치를 클릭하거나 드래그하면 픽셀 단위로 색을 칠할 수 있습니다. 칠한 부분
                       </li>
                       <li>
                         그리기가 끝나면 <strong>그리기 완료</strong> 버튼을 눌러 그림을 학교 공간 위에 게시하세요.
@@ -1187,7 +1265,7 @@ export default function Home() {
                         The Place의 캔버스는 <strong>학교 공간</strong>입니다.
                       </li>
                       <li>
-                        <strong>컴퓨터:</strong> Ctrl + 마우스 휠로 확대/축소, 일반 마우스 휠로 위아래 이동, 드래그로 수평 이동이 가능합니다.
+                        <strong>컴퓨터:</strong> Ctrl + 마우스 휠로 확대/축소, 일반 마우스 휠로 수직 이동, Shift + 마우스 휠로 수평 이동, 드래그로 자유 이동이 가능합니다.
                       </li>
                       <li>
                         <strong>모바일:</strong> 두 손가락으로 화면을 벌리거나 오므려 확대/축소, 드래그로 이동이 가능합니다.
@@ -1486,34 +1564,58 @@ export default function Home() {
               )}
 
               {isPaintMode && (
-                  <div className="w-full flex flex-col items-center gap-3 animate-in fade-in duration-300">
-                    <div className="flex flex-wrap justify-center gap-2 px-1">
-                      {PALETTE.map((c) => (
-                          <button
-                              key={c}
-                              onClick={() => setColor(c)}
-                              className={`w-7 h-7 rounded-full border-2 transition-transform shadow-sm ${
-                                  color === c
-                                      ? 'border-blue-500 scale-125 z-10'
-                                      : 'border-white hover:scale-110'
-                              }`}
-                              style={{
-                                backgroundColor: c
-                              }}
-                              aria-label={`Select color ${c}`}
-                          />
-                      ))}
-                    </div>
+                <div className="w-full flex flex-col items-center gap-3 animate-in fade-in duration-300">
+                  <div className="flex flex-wrap justify-center gap-2 px-1">
+                    {PALETTE.map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => setColor(c)}
+                        className={`w-7 h-7 rounded-full border-2 transition-transform shadow-sm ${
+                          color === c
+                            ? 'border-blue-500 scale-125 z-10'
+                            : 'border-white hover:scale-110'
+                        }`}
+                        style={{
+                          backgroundColor: c
+                        }}
+                        aria-label={`Select color ${c}`}
+                      />
+                    ))}
 
-                    {pendingPixels.length > 0 && (
-                        <button
-                            onClick={savePainting}
-                            className="w-full px-6 py-3 rounded-xl font-bold transition-colors whitespace-nowrap bg-green-500 hover:bg-green-600 text-white shadow-lg"
-                        >
-                          그리기 완료!
-                        </button>
-                    )}
+                    <label
+                      className={`relative w-7 h-7 rounded-full border-2 transition-transform shadow-sm cursor-pointer hover:scale-110 overflow-hidden ${
+                        !PALETTE.includes(color)
+                          ? 'border-blue-500 scale-125 z-10'
+                          : 'border-white'
+                      }`}
+                      style={{
+                        background: 'conic-gradient(red, yellow, lime, cyan, blue, magenta, red)'
+                      }}
+                      title="직접 색상 선택"
+                      aria-label="직접 색상 선택"
+                    >
+                      <input
+                        type="color"
+                        value={customColor}
+                        onChange={(e) => {
+                          const nextColor = e.target.value.toUpperCase();
+                          setCustomColor(nextColor);
+                          setColor(nextColor);
+                        }}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      />
+                    </label>
                   </div>
+
+                  {pendingPixels.length > 0 && (
+                    <button
+                      onClick={savePainting}
+                      className="w-full px-6 py-3 rounded-xl font-bold transition-colors whitespace-nowrap bg-green-500 hover:bg-green-600 text-white shadow-lg"
+                    >
+                      그리기 완료!
+                    </button>
+                  )}
+                </div>
               )}
 
               {isPaintMode && (
