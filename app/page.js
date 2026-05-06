@@ -59,6 +59,7 @@ export default function Home() {
   const isDraggingRef = useRef(false);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
   const draggedRef = useRef(false);
+  const lastTouchDistanceRef = useRef(0);
 
   useEffect(() => { objectsRef.current = objects; }, [objects]);
   useEffect(() => { floorRef.current = floor; }, [floor]);
@@ -593,23 +594,34 @@ export default function Home() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const cursorX = e.clientX - rect.left;
-    const cursorY = e.clientY - rect.top;
-
     const { x, y, scale } = transformRef.current;
 
-    const zoomFactor = 1.1;
-    let newScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor;
+    // Ctrl+스크롤: 확대/축소, 일반 스크롤: 위아래 이동
+    if (e.ctrlKey) {
+      // 확대/축소 모드
+      const rect = canvas.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
 
-    // Apply the max limit before calculating the new translation point
-    // to prevent translating to an out-of-bounds position when at max scale.
-    newScale = Math.min(newScale, 50);
+      const zoomFactor = 1.1;
+      let newScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor;
 
-    const newX = cursorX - (cursorX - x) * (newScale / scale);
-    const newY = cursorY - (cursorY - y) * (newScale / scale);
+      // 최소/최대 축소 레벨 적용
+      const { width, height } = imageSizeRef.current;
+      const minScale = Math.max(canvas.width / width, canvas.height / height);
+      newScale = Math.max(minScale, Math.min(newScale, 50));
 
-    transformRef.current = clampTransform(newX, newY, newScale);
+      const newX = cursorX - (cursorX - x) * (newScale / scale);
+      const newY = cursorY - (cursorY - y) * (newScale / scale);
+
+      transformRef.current = clampTransform(newX, newY, newScale);
+    } else {
+      // 위아래 이동 모드
+      const scrollAmount = 20; // 스크롤 감도 조절
+      const newY = e.deltaY > 0 ? y - scrollAmount : y + scrollAmount;
+
+      transformRef.current = clampTransform(x, newY, scale);
+    }
     render();
   }, [render, clampTransform, isImageLoaded]);
 
@@ -664,11 +676,80 @@ export default function Home() {
     render();
   };
 
+  const getTouchDistance = (touches) => {
+    if (touches.length < 2) return 0;
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const getTouchCenter = (touches) => {
+    if (touches.length === 0) return { x: 0, y: 0 };
+    let sumX = 0, sumY = 0;
+    for (let touch of touches) {
+      sumX += touch.clientX;
+      sumY += touch.clientY;
+    }
+    return { x: sumX / touches.length, y: sumY / touches.length };
+  };
+
+  const handleTouchStart = (e) => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      lastTouchDistanceRef.current = getTouchDistance(e.touches);
+    }
+  };
+
+  const handleTouchMove = (e) => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const newDistance = getTouchDistance(e.touches);
+      const oldDistance = lastTouchDistanceRef.current;
+
+      if (oldDistance === 0) {
+        lastTouchDistanceRef.current = newDistance;
+        return;
+      }
+
+      const { x, y, scale } = transformRef.current;
+      const zoomFactor = newDistance / oldDistance;
+      let newScale = scale * zoomFactor;
+      newScale = Math.max(Math.max(canvas.width / imageSizeRef.current.width, canvas.height / imageSizeRef.current.height), Math.min(newScale, 50));
+
+      const touchCenter = getTouchCenter(e.touches);
+      const rect = canvas.getBoundingClientRect();
+      const cursorX = touchCenter.x - rect.left;
+      const cursorY = touchCenter.y - rect.top;
+
+      const newX = cursorX - (cursorX - x) * (newScale / scale);
+      const newY = cursorY - (cursorY - y) * (newScale / scale);
+
+      transformRef.current = clampTransform(newX, newY, newScale);
+      lastTouchDistanceRef.current = newDistance;
+      render();
+    }
+  };
+
+  const handleTouchEnd = (e) => {
+    lastTouchDistanceRef.current = 0;
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas) {
       canvas.addEventListener('wheel', handleWheel, { passive: false });
-      return () => canvas.removeEventListener('wheel', handleWheel);
+      canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+      canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+      canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+      return () => {
+        canvas.removeEventListener('wheel', handleWheel);
+        canvas.removeEventListener('touchstart', handleTouchStart);
+        canvas.removeEventListener('touchmove', handleTouchMove);
+        canvas.removeEventListener('touchend', handleTouchEnd);
+      };
     }
   }, [handleWheel]);
 
@@ -821,7 +902,10 @@ export default function Home() {
                       The Place의 캔버스는 <strong>학교 공간</strong>입니다.
                     </li>
                     <li>
-                      마우스 휠로 확대하거나 축소할 수 있고, 화면을 드래그해 수평적인 이동을 할 수 있습니다.
+                      <strong>컴퓨터:</strong> Ctrl + 마우스 휠로 확대/축소, 일반 마우스 휠로 위아래 이동, 드래그로 수평 이동이 가능합니다.
+                    </li>
+                    <li>
+                      <strong>모바일:</strong> 두 손가락으로 화면을 벌리거나 오므려 확대/축소, 드래그로 이동이 가능합니다.
                     </li>
                     <li>
                       화면 왼쪽 위의 층 선택 버튼을 눌러 <strong>1층부터 5층까지</strong> 수직적으로 이동할 수 있습니다.
