@@ -166,13 +166,28 @@ export default function Home() {
 
     const scale = Math.max(minScale, Math.min(ns, 50));
 
-    const minX = canvas.width - width * scale;
-    const maxX = 0;
-    const minY = canvas.height - height * scale;
-    const maxY = 0;
+    const scaledWidth = width * scale;
+    const scaledHeight = height * scale;
 
-    const x = Math.min(Math.max(nx, minX), maxX);
-    const y = Math.min(Math.max(ny, minY), maxY);
+    let x;
+    let y;
+
+    // 이미지가 캔버스보다 작거나 같으면 가운데 고정
+    if (scaledWidth <= canvas.width) {
+      x = (canvas.width - scaledWidth) / 2;
+    } else {
+      const minX = canvas.width - scaledWidth;
+      const maxX = 0;
+      x = Math.min(Math.max(nx, minX), maxX);
+    }
+
+    if (scaledHeight <= canvas.height) {
+      y = (canvas.height - scaledHeight) / 2;
+    } else {
+      const minY = canvas.height - scaledHeight;
+      const maxY = 0;
+      y = Math.min(Math.max(ny, minY), maxY);
+    }
 
     return { x, y, scale };
   }, []);
@@ -214,35 +229,45 @@ export default function Home() {
     ctx.drawImage(bgImageRef.current, 0, 0, width, height);
     ctx.drawImage(dataCanvasRef.current, 0, 0);
 
-    const drawInnerBorder = (ctx, x, y, size, thickness, color) => {
-      ctx.fillStyle = color;
-      ctx.fillRect(x, y, size, thickness);
-      ctx.fillRect(x, y + size - thickness, size, thickness);
-      ctx.fillRect(x, y + thickness, thickness, size - thickness * 2);
-      ctx.fillRect(x + size - thickness, y + thickness, thickness, size - thickness * 2);
+    const drawInsetPixelMarker = (ctx, px, py, fillColor, scale) => {
+      const whiteBorder = Math.max(0.055, Math.min(0.15, 0.9 / scale));
+      const blackBorder = Math.max(0.055, Math.min(0.13, 0.75 / scale));
+
+      // 1. 픽셀 전체를 흰색으로 채움 = 바깥 흰색 테두리
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+      ctx.fillRect(px, py, 1, 1);
+
+      // 2. 안쪽을 검은색으로 채움 = 검은색 테두리
+      const blackInset = whiteBorder;
+      const blackSize = 1 - blackInset * 2;
+
+      if (blackSize <= 0) return;
+
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+      ctx.fillRect(
+        px + blackInset,
+        py + blackInset,
+        blackSize,
+        blackSize
+      );
+
+      // 3. 더 안쪽을 원래 색으로 채움 = 중앙 색상
+      const colorInset = whiteBorder + blackBorder;
+      const colorSize = 1 - colorInset * 2;
+
+      if (colorSize <= 0) return;
+
+      ctx.fillStyle = fillColor;
+      ctx.fillRect(
+        px + colorInset,
+        py + colorInset,
+        colorSize,
+        colorSize
+      );
     };
 
-    const time = performance.now() / 1000;
-    const pulse = 0.5 + Math.sin(time * 5) * 0.5;
-    const innerBorder = Math.max(0.08, Math.min(0.22, 1.0 / scale));
-
     pendingPixelsRef.current.forEach((p) => {
-      ctx.fillStyle = p.color;
-      ctx.fillRect(p.x, p.y, 1, 1);
-
-      const innerGlowThickness = innerBorder;
-      const inset = innerBorder;
-
-      if (1 - inset * 2 > 0 && innerGlowThickness > 0) {
-        drawInnerBorder(
-            ctx,
-            p.x,
-            p.y,
-            1,
-            innerGlowThickness,
-            `rgba(255, 255, 255, ${0.6 + pulse * 0.2})`
-        );
-      }
+      drawInsetPixelMarker(ctx, p.x, p.y, p.color, scale);
     });
 
     if (selectedObjectIdRef.current) {
@@ -272,36 +297,17 @@ export default function Home() {
     }
 
     if (hoverPixelRef.current) {
-      const { x: hx, y: hy } = hoverPixelRef.current;
+    const { x: hx, y: hy } = hoverPixelRef.current;
 
-      if (isPaintModeRef.current) {
-        if (floorRef.current === 1 || !isWhiteBackgroundPixel(hx, hy)) {
-          const cursorBorder = Math.max(0.08, Math.min(0.2, 1.3 / scale));
-
-          ctx.globalAlpha = 0.6;
-          ctx.fillStyle = colorRef.current;
-          ctx.fillRect(hx, hy, 1, 1);
-          ctx.globalAlpha = 1.0;
-
-          const inset = cursorBorder;
-          const whiteThickness = cursorBorder;
-
-          if (1 - inset * 2 > 0 && whiteThickness > 0) {
-            drawInnerBorder(
-                ctx,
-                hx,
-                hy,
-                1,
-                whiteThickness,
-                'rgba(255, 255, 255, 0.95)'
-            );
-          }
-        }
-      } else {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.fillRect(hx, hy, 1, 1);
+    if (isPaintModeRef.current) {
+      if (floorRef.current === 1 || !isWhiteBackgroundPixel(hx, hy)) {
+        drawInsetPixelMarker(ctx, hx, hy, colorRef.current, scale);
       }
+    } else {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.fillRect(hx, hy, 1, 1);
     }
+  }
 
     ctx.restore();
   }, [isWhiteBackgroundPixel]);
