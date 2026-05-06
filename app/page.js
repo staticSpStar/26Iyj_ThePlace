@@ -44,6 +44,8 @@ export default function Home() {
   const [currentUserEmail, setCurrentUserEmail] = useState(null);
   const [showFullLeaderboard, setShowFullLeaderboard] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  
+  const [palettePos, setPalettePos] = useState(null);
 
   const colorRef = useRef(PALETTE[6]);
   const isPaintModeRef = useRef(false);
@@ -51,6 +53,7 @@ export default function Home() {
   const hoverPixelRef = useRef(null);
   const animationFrameRef = useRef(null);
   const floorRef = useRef(1);
+  const floorChangeTimerRef = useRef(null);
   const paintStartedAtRef = useRef(null);
 
   const objectsRef = useRef([]);
@@ -68,6 +71,14 @@ export default function Home() {
   const isPinchingRef = useRef(false);
   const pinchStartDistRef = useRef(0);
   const pinchStartScaleRef = useRef(1);
+
+  const paletteDragRef = useRef({
+    dragging: false,
+    startX: 0,
+    startY: 0,
+    startLeft: 0,
+    startTop: 0
+  });
 
   const isWhiteBackgroundPixel = useCallback((px, py) => {
     if (!bgImageRef.current) return false;
@@ -113,23 +124,45 @@ export default function Home() {
   }, []);
 
   const handleFloorChange = useCallback((newFloor) => {
-    if (newFloor < 1 || newFloor > 5 || newFloor === floorRef.current) return;
+    if (newFloor < 1 || newFloor > 5) return;
+
+    // 이미 현재 표시 중이거나, 마지막으로 요청된 층과 같으면 무시
+    if (newFloor === floorRef.current) return;
+
+    // 이전 층 변경 예약이 남아 있으면 취소
+    if (floorChangeTimerRef.current) {
+      clearTimeout(floorChangeTimerRef.current);
+      floorChangeTimerRef.current = null;
+    }
+
+    // 마지막으로 누른 층을 즉시 ref에 반영
+    // 빠르게 여러 층을 눌렀을 때 이전 층으로 되돌아가는 것을 방지
+    floorRef.current = newFloor;
 
     setIsFading(true);
 
-    setTimeout(() => {
+    floorChangeTimerRef.current = setTimeout(() => {
       setFloor(newFloor);
-      floorRef.current = newFloor;
+
       setPendingPixels([]);
       pendingPixelsRef.current = [];
+
       setSelectedObjectId(null);
       selectedObjectIdRef.current = null;
 
-      fetchObjects().then(() => {
-        setIsFading(false);
-      });
+      setIsFading(false);
+
+      floorChangeTimerRef.current = null;
     }, 300);
-  }, [fetchObjects]);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (floorChangeTimerRef.current) {
+        clearTimeout(floorChangeTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -149,6 +182,10 @@ export default function Home() {
     const interval = setInterval(fetchObjects, 5000);
     return () => clearInterval(interval);
   }, [fetchObjects]);
+
+  useEffect(() => {
+    fetchObjects();
+  }, [floor, fetchObjects]);
 
   useEffect(() => {
     if (session && !localStorage.getItem('firstLoginCheck')) {
@@ -421,16 +458,90 @@ export default function Home() {
 
     if (m) {
       paintStartedAtRef.current = new Date().toISOString();
+
+      requestAnimationFrame(() => {
+        resetPalettePosition();
+      });
     }
 
     if (!m) {
       setPendingPixels([]);
       pendingPixelsRef.current = [];
       paintStartedAtRef.current = null;
+      setPalettePos(null);
     }
 
     render();
   };
+
+  const handlePaletteHandlePointerDown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+
+    const currentLeft = palettePos?.left ?? rect.width / 2;
+    const currentTop = palettePos?.top ?? rect.height - 150;
+
+    paletteDragRef.current = {
+      dragging: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startLeft: currentLeft,
+      startTop: currentTop
+    };
+
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handlePaletteHandlePointerMove = (e) => {
+    if (!paletteDragRef.current.dragging) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+
+    const dx = e.clientX - paletteDragRef.current.startX;
+    const dy = e.clientY - paletteDragRef.current.startY;
+
+    const nextLeft = paletteDragRef.current.startLeft + dx;
+    const nextTop = paletteDragRef.current.startTop + dy;
+
+    const margin = 16;
+
+    setPalettePos({
+      left: Math.max(margin, Math.min(rect.width - margin, nextLeft)),
+      top: Math.max(margin, Math.min(rect.height - margin, nextTop))
+    });
+  };
+
+  const handlePaletteHandlePointerUp = (e) => {
+    paletteDragRef.current.dragging = false;
+
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  const resetPalettePosition = useCallback(() => {
+    const container = containerRef.current;
+
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+
+    setPalettePos({
+      left: rect.width / 2,
+      top: rect.height - 150
+    });
+  }, []);
 
   const savePainting = async () => {
     if (pendingPixelsRef.current.length === 0) return;
@@ -1024,7 +1135,7 @@ export default function Home() {
   }, [handleWheel]);
 
   return (
-      <div className="flex flex-col h-screen w-full bg-gray-50 text-black font-sans overflow-hidden">
+      <div className="flex flex-col h-[100dvh] w-full bg-gray-50 text-black font-sans overflow-hidden">
         <div className="absolute top-4 right-4 z-20 flex items-center gap-3">
           <button
               onClick={() => openLeaderboard("user")}
@@ -1477,30 +1588,59 @@ export default function Home() {
           })()}
 
           <div
-              className={`absolute bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] sm:bottom-4 left-1/2 -translate-x-1/2 z-20 transition-all duration-300 ${
-                  isPaintMode
-                      ? 'w-[95%] max-w-md'
-                      : 'w-auto'
-              }`}
+            className={`absolute z-20 transition-opacity duration-300 ${
+              isPaintMode
+                ? 'w-auto max-w-[calc(100vw-1rem)]'
+                : 'w-auto'
+            }`}
+            style={
+              isPaintMode && palettePos
+                ? {
+                    left: palettePos.left,
+                    top: palettePos.top,
+                    transform: 'translate(-50%, -50%)'
+                  }
+                : {
+                    left: '50%',
+                    bottom: 'calc(env(safe-area-inset-bottom) + 5.5rem)',
+                    transform: 'translateX(-50%)'
+                  }
+            }
           >
-            <div className="relative flex items-center justify-center bg-white/90 backdrop-blur-lg shadow-2xl border border-gray-200 rounded-2xl md:rounded-3xl p-3">
+            <div className="relative flex items-center justify-center bg-white/90 backdrop-blur-lg shadow-2xl border border-gray-200 rounded-2xl md:rounded-3xl p-3 overflow-visible">
+              {isPaintMode && (
+                <button
+                  type="button"
+                  onPointerDown={handlePaletteHandlePointerDown}
+                  onPointerMove={handlePaletteHandlePointerMove}
+                  onPointerUp={handlePaletteHandlePointerUp}
+                  onPointerCancel={handlePaletteHandlePointerUp}
+                  className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-white text-gray-700 border border-gray-300 shadow-lg flex items-center justify-center cursor-grab active:cursor-grabbing z-30 font-bold"
+                  title="팔레트 이동"
+                  aria-label="팔레트 이동"
+                >
+                  ⋮⋮
+                </button>
+              )}
               {!isPaintMode && (
                   <button
                       onClick={() => session ? setIsPaintMode(true) : signIn('google')}
-                      className="px-8 py-2.5 rounded-full font-bold transition-transform hover:scale-105 active:scale-95 whitespace-nowrap bg-blue-500 text-white shadow-md"
+                      className="px-5 py-2.5 rounded-full font-bold transition-transform hover:scale-105 active:scale-95 whitespace-nowrap bg-blue-500 text-white shadow-md"
                   >
-                    그리기
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-brush" viewBox="0 0 16 16">
+                      <path d="M15.825.12a.5.5 0 0 1 .132.584c-1.53 3.43-4.743 8.17-7.095 10.64a6.1 6.1 0 0 1-2.373 1.534c-.018.227-.06.538-.16.868-.201.659-.667 1.479-1.708 1.74a8.1 8.1 0 0 1-3.078.132 4 4 0 0 1-.562-.135 1.4 1.4 0 0 1-.466-.247.7.7 0 0 1-.204-.288.62.62 0 0 1 .004-.443c.095-.245.316-.38.461-.452.394-.197.625-.453.867-.826.095-.144.184-.297.287-.472l.117-.198c.151-.255.326-.54.546-.848.528-.739 1.201-.925 1.746-.896q.19.012.348.048c.062-.172.142-.38.238-.608.261-.619.658-1.419 1.187-2.069 2.176-2.67 6.18-6.206 9.117-8.104a.5.5 0 0 1 .596.04M4.705 11.912a1.2 1.2 0 0 0-.419-.1c-.246-.013-.573.05-.879.479-.197.275-.355.532-.5.777l-.105.177c-.106.181-.213.362-.32.528a3.4 3.4 0 0 1-.76.861c.69.112 1.736.111 2.657-.12.559-.139.843-.569.993-1.06a3 3 0 0 0 .126-.75zm1.44.026c.12-.04.277-.1.458-.183a5.1 5.1 0 0 0 1.535-1.1c1.9-1.996 4.412-5.57 6.052-8.631-2.59 1.927-5.566 4.66-7.302 6.792-.442.543-.795 1.243-1.042 1.826-.121.288-.214.54-.275.72v.001l.575.575zm-4.973 3.04.007-.005zm3.582-3.043.002.001h-.002z"/>
+                    </svg>
                   </button>
               )}
 
               {isPaintMode && (
                 <div className="w-full flex flex-col items-center gap-3 animate-in fade-in duration-300">
-                  <div className="flex flex-wrap justify-center gap-2 px-1">
+                  <div className="grid grid-cols-11 gap-1.5 px-1 justify-center">
                     {PALETTE.map((c) => (
                       <button
                         key={c}
                         onClick={() => setColor(c)}
-                        className={`w-7 h-7 rounded-full border-2 transition-transform shadow-sm ${
+                        className={`w-6 h-6 rounded-full border-2 transition-transform shadow-sm ${
                           color === c
                             ? 'border-blue-500 scale-125 z-10'
                             : 'border-white hover:scale-110'
@@ -1513,7 +1653,7 @@ export default function Home() {
                     ))}
 
                     <label
-                      className={`relative w-7 h-7 rounded-full border-2 transition-transform shadow-sm cursor-pointer hover:scale-110 overflow-hidden ${
+                      className={`relative w-6 h-6 rounded-full border-2 transition-transform shadow-sm cursor-pointer hover:scale-110 overflow-hidden ${
                         !PALETTE.includes(color)
                           ? 'border-blue-500 scale-125 z-10'
                           : 'border-white'
@@ -1538,15 +1678,17 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={setEraserMode}
-                      className={`w-7 h-7 rounded-full border-2 transition-transform shadow-sm hover:scale-110 flex items-center justify-center text-sm ${
+                      className={`w-6 h-6 rounded-full border-2 transition-transform shadow-sm hover:scale-110 flex items-center justify-center text-[11px] ${
                         isEraserMode
-                          ? 'border-red-500 scale-125 z-10 bg-red-50'
+                          ? 'border-red-500 scale-125 z-10 bg-red-500 text-white'
                           : 'border-white bg-white'
                       }`}
                       title="지우개"
                       aria-label="지우개"
                     >
-                      🧽
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-eraser-fill" viewBox="0 0 16 16">
+                        <path d="M8.086 2.207a2 2 0 0 1 2.828 0l3.879 3.879a2 2 0 0 1 0 2.828l-5.5 5.5A2 2 0 0 1 7.879 15H5.12a2 2 0 0 1-1.414-.586l-2.5-2.5a2 2 0 0 1 0-2.828zm.66 11.34L3.453 8.254 1.914 9.793a1 1 0 0 0 0 1.414l2.5 2.5a1 1 0 0 0 .707.293H7.88a1 1 0 0 0 .707-.293z"/>
+                      </svg>
                     </button>
                   </div>
 
