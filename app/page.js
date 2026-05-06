@@ -22,6 +22,7 @@ export default function Home() {
   const dataCanvasRef = useRef(null);
   const bgImageRef = useRef(null);
   const imageSizeRef = useRef({ width: 1000, height: 1000 });
+  const palettePanelRef = useRef(null);
 
   const [color, setColorState] = useState(PALETTE[6]);
   const [customColor, setCustomColor] = useState("#E50000");
@@ -126,17 +127,13 @@ export default function Home() {
   const handleFloorChange = useCallback((newFloor) => {
     if (newFloor < 1 || newFloor > 5) return;
 
-    // 이미 현재 표시 중이거나, 마지막으로 요청된 층과 같으면 무시
     if (newFloor === floorRef.current) return;
 
-    // 이전 층 변경 예약이 남아 있으면 취소
     if (floorChangeTimerRef.current) {
       clearTimeout(floorChangeTimerRef.current);
       floorChangeTimerRef.current = null;
     }
 
-    // 마지막으로 누른 층을 즉시 ref에 반영
-    // 빠르게 여러 층을 눌렀을 때 이전 층으로 되돌아가는 것을 방지
     floorRef.current = newFloor;
 
     setIsFading(true);
@@ -194,15 +191,22 @@ export default function Home() {
     }
   }, [session]);
 
+  const getFitScale = useCallback((canvas, width, height) => {
+    if (!canvas || width <= 0 || height <= 0) return 1;
+
+    return Math.min(
+      canvas.width / width,
+      canvas.height / height
+    );
+  }, []);
+
   const clampTransform = useCallback((nx, ny, ns) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: nx, y: ny, scale: ns };
 
     const { width, height } = imageSizeRef.current;
 
-    const minScale = width > height
-        ? canvas.width / width
-        : canvas.height / height;
+    const minScale = getFitScale(canvas, width, height);
 
     const scale = Math.max(minScale, Math.min(ns, 50));
 
@@ -212,7 +216,6 @@ export default function Home() {
     let x;
     let y;
 
-    // 이미지가 캔버스보다 작거나 같으면 가운데 고정
     if (scaledWidth <= canvas.width) {
       x = (canvas.width - scaledWidth) / 2;
     } else {
@@ -230,7 +233,7 @@ export default function Home() {
     }
 
     return { x, y, scale };
-  }, []);
+  }, [getFitScale]);
 
   const resetTransformToImage = useCallback(() => {
     const canvas = canvasRef.current;
@@ -238,16 +241,12 @@ export default function Home() {
 
     const { width, height } = imageSizeRef.current;
 
-    const minScale = width > height
-        ? canvas.width / width
-        : canvas.height / height;
-
-    const initScale = minScale;
+    const initScale = getFitScale(canvas, width, height);
     const initX = (canvas.width - width * initScale) / 2;
     const initY = (canvas.height - height * initScale) / 2;
 
     transformRef.current = clampTransform(initX, initY, initScale);
-  }, [clampTransform]);
+  }, [clampTransform, getFitScale]);
 
   const drawInsetPixelMarker = (ctx, px, py, fillColor, scale) => {
     const whiteBorder = Math.max(0.055, Math.min(0.15, 0.9 / scale));
@@ -497,6 +496,44 @@ export default function Home() {
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
+  const clampPalettePosition = useCallback((left, top) => {
+    const container = containerRef.current;
+    const panel = palettePanelRef.current;
+
+    if (!container || !panel) {
+      return { left, top };
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+
+    const margin = 12;
+
+    const halfWidth = panelRect.width / 2;
+    const halfHeight = panelRect.height / 2;
+
+    let minLeft = halfWidth + margin;
+    let maxLeft = containerRect.width - halfWidth - margin;
+
+    let minTop = halfHeight + margin;
+    let maxTop = containerRect.height - halfHeight - margin;
+
+    if (minLeft > maxLeft) {
+      minLeft = containerRect.width / 2;
+      maxLeft = containerRect.width / 2;
+    }
+
+    if (minTop > maxTop) {
+      minTop = containerRect.height / 2;
+      maxTop = containerRect.height / 2;
+    }
+
+    return {
+      left: Math.max(minLeft, Math.min(maxLeft, left)),
+      top: Math.max(minTop, Math.min(maxTop, top))
+    };
+  }, []);
+
   const handlePaletteHandlePointerMove = (e) => {
     if (!paletteDragRef.current.dragging) return;
 
@@ -514,12 +551,9 @@ export default function Home() {
     const nextLeft = paletteDragRef.current.startLeft + dx;
     const nextTop = paletteDragRef.current.startTop + dy;
 
-    const margin = 16;
-
-    setPalettePos({
-      left: Math.max(margin, Math.min(rect.width - margin, nextLeft)),
-      top: Math.max(margin, Math.min(rect.height - margin, nextTop))
-    });
+    setPalettePos(
+      clampPalettePosition(nextLeft, nextTop)
+    );
   };
 
   const handlePaletteHandlePointerUp = (e) => {
@@ -537,11 +571,29 @@ export default function Home() {
 
     const rect = container.getBoundingClientRect();
 
-    setPalettePos({
-      left: rect.width / 2,
-      top: rect.height - 150
-    });
+    setPalettePos(
+      clampPalettePosition(rect.width / 2, rect.height - 150)
+    );
   }, []);
+
+  useEffect(() => {
+    const handleResizePalette = () => {
+      if (!palettePos) return;
+
+      requestAnimationFrame(() => {
+        setPalettePos((prev) => {
+          if (!prev) return prev;
+          return clampPalettePosition(prev.left, prev.top);
+        });
+      });
+    };
+
+    window.addEventListener('resize', handleResizePalette);
+
+    return () => {
+      window.removeEventListener('resize', handleResizePalette);
+    };
+  }, [palettePos, clampPalettePosition]);
 
   const savePainting = async () => {
     if (pendingPixelsRef.current.length === 0) return;
@@ -770,11 +822,7 @@ export default function Home() {
         const { x, y, scale } = transformRef.current;
 
         if (x === 0 && y === 0 && scale === 1) {
-          const minScale = width > height
-              ? canvasRef.current.width / width
-              : canvasRef.current.height / height;
-
-          const initScale = minScale;
+          const initScale = getFitScale(canvasRef.current, width, height);
           const initX = (canvasRef.current.width - width * initScale) / 2;
           const initY = (canvasRef.current.height - height * initScale) / 2;
 
@@ -791,7 +839,7 @@ export default function Home() {
     resize();
 
     return () => window.removeEventListener('resize', resize);
-  }, [render, clampTransform, isImageLoaded]);
+  }, [render, clampTransform, isImageLoaded, getFitScale]);
 
   const handlePointerDown = (e) => {
     if (!isImageLoaded) return;
@@ -1007,7 +1055,6 @@ export default function Home() {
     const { x, y, scale } = transformRef.current;
 
     if (e.ctrlKey) {
-      // Ctrl + 스크롤: 확대/축소
       const rect = canvas.getBoundingClientRect();
 
       const cursorX = e.clientX - rect.left;
@@ -1021,9 +1068,7 @@ export default function Home() {
 
       const { width, height } = imageSizeRef.current;
 
-      const minScale = width > height
-          ? canvas.width / width
-          : canvas.height / height;
+      const minScale = getFitScale(canvas, width, height);
 
       newScale = Math.max(minScale, Math.min(newScale, 50));
 
@@ -1032,7 +1077,6 @@ export default function Home() {
 
       transformRef.current = clampTransform(newX, newY, newScale);
     } else if (e.shiftKey) {
-      // Shift + 스크롤: 좌우 이동
       const scrollAmount = Math.abs(e.deltaY) > Math.abs(e.deltaX)
           ? e.deltaY
           : e.deltaX;
@@ -1045,7 +1089,6 @@ export default function Home() {
 
       transformRef.current = clampTransform(newX, y, scale);
     } else {
-      // 일반 스크롤: 위아래 이동
       const scrollAmount = 20;
 
       const newY = e.deltaY > 0
@@ -1056,7 +1099,7 @@ export default function Home() {
     }
 
     render();
-  }, [render, clampTransform, isImageLoaded]);
+  }, [render, clampTransform, isImageLoaded, getFitScale]);
 
   const handlePointerOut = (e) => {
     if (e?.pointerId != null) {
@@ -1588,11 +1631,7 @@ export default function Home() {
           })()}
 
           <div
-            className={`absolute z-20 transition-opacity duration-300 ${
-              isPaintMode
-                ? 'w-auto max-w-[calc(100vw-1rem)]'
-                : 'w-auto'
-            }`}
+            className="absolute z-20 transition-opacity duration-300"
             style={
               isPaintMode && palettePos
                 ? {
@@ -1607,7 +1646,13 @@ export default function Home() {
                   }
             }
           >
-            <div className="relative flex items-center justify-center bg-white/90 backdrop-blur-lg shadow-2xl border border-gray-200 rounded-2xl md:rounded-3xl p-3 overflow-visible">
+            <div
+              ref={palettePanelRef}
+              className="relative flex items-center justify-center bg-white/90 backdrop-blur-lg shadow-2xl border border-gray-200 rounded-2xl md:rounded-3xl p-3 overflow-visible box-border"
+              style={{
+                width: 'min(380px, calc(100vw - 1rem))'
+              }}
+            >
               {isPaintMode && (
                 <button
                   type="button"
@@ -1635,7 +1680,7 @@ export default function Home() {
 
               {isPaintMode && (
                 <div className="w-full flex flex-col items-center gap-3 animate-in fade-in duration-300">
-                  <div className="grid grid-cols-11 gap-1.5 px-1 justify-center">
+                  <div className="flex flex-wrap justify-center gap-1.5 px-1 w-full">
                     {PALETTE.map((c) => (
                       <button
                         key={c}
