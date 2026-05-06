@@ -25,6 +25,7 @@ export default function Home() {
 
   const [color, setColorState] = useState(PALETTE[6]);
   const [customColor, setCustomColor] = useState("#E50000");
+  const [isEraserMode, setIsEraserMode] = useState(false);
   const [isPaintMode, setIsPaintModeState] = useState(false);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
 
@@ -46,6 +47,7 @@ export default function Home() {
 
   const colorRef = useRef(PALETTE[6]);
   const isPaintModeRef = useRef(false);
+  const isEraserModeRef = useRef(false);
   const hoverPixelRef = useRef(null);
   const animationFrameRef = useRef(null);
   const floorRef = useRef(1);
@@ -335,7 +337,20 @@ export default function Home() {
 
         if (isPaintModeRef.current) {
           if (floorRef.current === 1 || !isWhiteBackgroundPixel(hx, hy)) {
-            drawInsetPixelMarker(ctx, hx, hy, colorRef.current, scale);
+            if (isEraserModeRef.current) {
+              ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+              ctx.fillRect(hx, hy, 1, 1);
+
+              ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
+              const t = Math.max(0.08, Math.min(0.18, 1 / scale));
+
+              ctx.fillRect(hx, hy, 1, t);
+              ctx.fillRect(hx, hy + 1 - t, 1, t);
+              ctx.fillRect(hx, hy, t, 1);
+              ctx.fillRect(hx + 1 - t, hy, t, 1);
+            } else {
+              drawInsetPixelMarker(ctx, hx, hy, colorRef.current, scale);
+            }
           }
         } else {
           ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
@@ -383,8 +398,17 @@ export default function Home() {
   }, [render]);
 
   const setColor = (c) => {
+    setIsEraserMode(false);
+    isEraserModeRef.current = false;
+
     setColorState(c);
     colorRef.current = c;
+    render();
+  };
+
+  const setEraserMode = () => {
+    setIsEraserMode(true);
+    isEraserModeRef.current = true;
     render();
   };
 
@@ -940,8 +964,6 @@ export default function Home() {
   };
 
   const paintPixel = (px, py, paintColor, options = {}) => {
-    const { allowDelete = true } = options;
-
     if (!session) {
       alert('로그인이 필요합니다.');
       return;
@@ -952,24 +974,26 @@ export default function Home() {
     }
 
     const existingIdx = pendingPixelsRef.current.findIndex(
-        (p) => p.x === px && p.y === py
+      (p) => p.x === px && p.y === py
     );
+
+    if (isEraserModeRef.current) {
+      if (existingIdx !== -1) {
+        pendingPixelsRef.current.splice(existingIdx, 1);
+        setPendingPixels([...pendingPixelsRef.current]);
+        render();
+      }
+
+      return;
+    }
 
     if (existingIdx !== -1) {
       const existingPixel = pendingPixelsRef.current[existingIdx];
 
-      if (existingPixel.color.toUpperCase() === paintColor.toUpperCase()) {
-        if (allowDelete) {
-          pendingPixelsRef.current.splice(existingIdx, 1);
-        } else {
-          return;
-        }
-      } else {
-        pendingPixelsRef.current[existingIdx] = {
-          ...existingPixel,
-          color: paintColor
-        };
-      }
+      pendingPixelsRef.current[existingIdx] = {
+        ...existingPixel,
+        color: paintColor
+      };
     } else {
       pendingPixelsRef.current.push({
         x: px,
@@ -982,91 +1006,6 @@ export default function Home() {
     render();
   };
 
-  const getTouchDistance = (touches) => {
-    if (touches.length < 2) return 0;
-
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-
-    return Math.sqrt(dx * dx + dy * dy);
-  };
-
-  const getTouchCenter = (touches) => {
-    if (touches.length === 0) return {
-      x: 0,
-      y: 0
-    };
-
-    let sumX = 0;
-    let sumY = 0;
-
-    for (let touch of touches) {
-      sumX += touch.clientX;
-      sumY += touch.clientY;
-    }
-
-    return {
-      x: sumX / touches.length,
-      y: sumY / touches.length
-    };
-  };
-
-  const handleTouchStart = (e) => {
-    if (e.touches.length === 2) {
-      e.preventDefault();
-      lastTouchDistanceRef.current = getTouchDistance(e.touches);
-    }
-  };
-
-  const handleTouchMove = (e) => {
-    if (e.touches.length === 2) {
-      e.preventDefault();
-
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-
-      const newDistance = getTouchDistance(e.touches);
-      const oldDistance = lastTouchDistanceRef.current;
-
-      if (oldDistance === 0) {
-        lastTouchDistanceRef.current = newDistance;
-        return;
-      }
-
-      const { x, y, scale } = transformRef.current;
-
-      const zoomFactor = newDistance / oldDistance;
-
-      let newScale = scale * zoomFactor;
-
-      const { width, height } = imageSizeRef.current;
-
-      const minScale = width > height
-          ? canvas.width / width
-          : canvas.height / height;
-
-      newScale = Math.max(minScale, Math.min(newScale, 50));
-
-      const touchCenter = getTouchCenter(e.touches);
-      const rect = canvas.getBoundingClientRect();
-
-      const cursorX = touchCenter.x - rect.left;
-      const cursorY = touchCenter.y - rect.top;
-
-      const newX = cursorX - (cursorX - x) * (newScale / scale);
-      const newY = cursorY - (cursorY - y) * (newScale / scale);
-
-      transformRef.current = clampTransform(newX, newY, newScale);
-      lastTouchDistanceRef.current = newDistance;
-
-      render();
-    }
-  };
-
-  const handleTouchEnd = () => {
-    lastTouchDistanceRef.current = 0;
-  };
-
   useEffect(() => {
     const canvas = canvasRef.current;
 
@@ -1075,23 +1014,8 @@ export default function Home() {
         passive: false
       });
 
-      canvas.addEventListener('touchstart', handleTouchStart, {
-        passive: false
-      });
-
-      canvas.addEventListener('touchmove', handleTouchMove, {
-        passive: false
-      });
-
-      canvas.addEventListener('touchend', handleTouchEnd, {
-        passive: false
-      });
-
       return () => {
         canvas.removeEventListener('wheel', handleWheel);
-        canvas.removeEventListener('touchstart', handleTouchStart);
-        canvas.removeEventListener('touchmove', handleTouchMove);
-        canvas.removeEventListener('touchend', handleTouchEnd);
       };
     }
   }, [handleWheel]);
@@ -1239,7 +1163,10 @@ export default function Home() {
                         팔레트에 있는 다양한 색을 선택해 학교 공간 위에 그림을 그릴 수 있습니다.
                       </li>
                       <li>
-                        원하는 위치를 클릭하거나 드래그하면 픽셀 단위로 색을 칠할 수 있습니다. 칠한 부분을 다시 누르면 색이 지워집니다.
+                        원하는 위치를 클릭하거나 드래그하면 픽셀 단위로 색을 칠할 수 있습니다.
+                      </li>
+                      <li>
+                        실수로 그린 부분은 팔레트의 지우개 모드를 선택하여 지울 수 있습니다.
                       </li>
                       <li>
                         그리기가 끝나면 <strong>그리기 완료</strong> 버튼을 눌러 그림을 학교 공간 위에 게시하세요.
@@ -1605,6 +1532,19 @@ export default function Home() {
                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                       />
                     </label>
+                    <button
+                      type="button"
+                      onClick={setEraserMode}
+                      className={`w-7 h-7 rounded-full border-2 transition-transform shadow-sm hover:scale-110 flex items-center justify-center text-sm ${
+                        isEraserMode
+                          ? 'border-red-500 scale-125 z-10 bg-red-50'
+                          : 'border-white bg-white'
+                      }`}
+                      title="지우개"
+                      aria-label="지우개"
+                    >
+                      🧽
+                    </button>
                   </div>
 
                   {pendingPixels.length > 0 && (
