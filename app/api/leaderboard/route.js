@@ -20,6 +20,37 @@ function toArrayFromMap(map, valueKey) {
   }));
 }
 
+function normalizeStudentInfo(email, userName) {
+  const student = getStudentInfoByEmail(email);
+
+  const hasValidStudentId =
+      student?.studentId &&
+      typeof student.studentId === "string" &&
+      student.studentId.trim().length > 0;
+
+  if (!hasValidStudentId) {
+    return {
+      isTeacher: true,
+      email,
+      name: userName || email || "알 수 없음",
+      studentId: null,
+      grade: "교사",
+      classNo: null,
+      classLabel: "교사"
+    };
+  }
+
+  return {
+    isTeacher: false,
+    email,
+    name: student.name || userName || email,
+    studentId: student.studentId,
+    grade: student.grade || "미상",
+    classNo: student.classNo || "미상",
+    classLabel: student.classLabel || "미상"
+  };
+}
+
 export async function GET(req) {
   await dbConnect();
 
@@ -48,7 +79,7 @@ export async function GET(req) {
 
   for (const obj of objects) {
     const email = obj.userEmail || "unknown";
-    const student = getStudentInfoByEmail(email);
+    const personInfo = normalizeStudentInfo(email, obj.userName);
 
     const pixelCount = obj.pixels?.length || 0;
     const durationSeconds = obj.durationSeconds || 0;
@@ -57,11 +88,12 @@ export async function GET(req) {
     if (!personalMap[email]) {
       personalMap[email] = {
         email,
-        name: student.name || obj.userName || email,
-        studentId: student.studentId,
-        grade: student.grade,
-        classNo: student.classNo,
-        classLabel: student.classLabel,
+        name: personInfo.name,
+        studentId: personInfo.studentId,
+        grade: personInfo.grade,
+        classNo: personInfo.classNo,
+        classLabel: personInfo.classLabel,
+        isTeacher: personInfo.isTeacher,
         pixelCount: 0,
         durationSeconds: 0
       };
@@ -70,10 +102,12 @@ export async function GET(req) {
     personalMap[email].pixelCount += pixelCount;
     personalMap[email].durationSeconds += durationSeconds;
 
-    const classLabel = student.classLabel || "미상";
-    const gradeLabel =
-        student.grade && student.grade !== "미상"
-            ? `${student.grade}학년`
+    const classLabel = personInfo.classLabel || "미상";
+
+    const gradeLabel = personInfo.isTeacher
+        ? "교사"
+        : personInfo.grade && personInfo.grade !== "미상"
+            ? `${personInfo.grade}학년`
             : "미상";
 
     classPixelMap[classLabel] =
@@ -112,7 +146,9 @@ export async function GET(req) {
       "pixelCount"
   ).map((p) => ({
     label: p.name,
-    subLabel: p.studentId ? `${p.studentId} · ${p.email}` : p.email,
+    subLabel: p.studentId
+        ? `${p.studentId} · ${p.email}`
+        : `교사 · ${p.email}`,
     value: p.pixelCount,
     valueText: `${p.pixelCount}픽셀`
   }));
@@ -122,7 +158,9 @@ export async function GET(req) {
       "durationSeconds"
   ).map((p) => ({
     label: p.name,
-    subLabel: p.studentId ? `${p.studentId} · ${p.email}` : p.email,
+    subLabel: p.studentId
+        ? `${p.studentId} · ${p.email}`
+        : `교사 · ${p.email}`,
     value: p.durationSeconds,
     valueText: `${p.durationSeconds}초`
   }));
@@ -132,7 +170,9 @@ export async function GET(req) {
       "pixelsPerSecond"
   ).map((p) => ({
     label: p.name,
-    subLabel: p.studentId ? `${p.studentId} · ${p.email}` : p.email,
+    subLabel: p.studentId
+        ? `${p.studentId} · ${p.email}`
+        : `교사 · ${p.email}`,
     value: p.pixelsPerSecond,
     valueText: `${p.pixelsPerSecond.toFixed(2)}픽셀/초`
   }));
