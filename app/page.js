@@ -9,7 +9,7 @@ const PALETTE = [
   '#CF6EE4', '#820080', '#FF3904', '#FFB381', '#FFD635'
 ];
 
-const ADMIN_EMAILS = ['mainforwoo@sasa.hs.kr', 'mojin81@sasa.hs.kr']; // Add your admins here
+const ADMIN_EMAILS = ['mainforwoo@sasa.hs.kr', 'mojin81@sasa.hs.kr'];
 
 export default function Home() {
   const { data: session } = useSession();
@@ -43,10 +43,10 @@ export default function Home() {
   const [showFullLeaderboard, setShowFullLeaderboard] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
 
-
   const colorRef = useRef('#ff0000');
   const isPaintModeRef = useRef(false);
   const hoverPixelRef = useRef(null);
+  const animationFrameRef = useRef(null);
   const floorRef = useRef(1);
   const paintStartedAtRef = useRef(null);
 
@@ -66,17 +66,47 @@ export default function Home() {
   const pinchStartDistRef = useRef(0);
   const pinchStartScaleRef = useRef(1);
 
-  useEffect(() => { objectsRef.current = objects; }, [objects]);
-  useEffect(() => { floorRef.current = floor; }, [floor]);
+  const isWhiteBackgroundPixel = useCallback((px, py) => {
+    if (!bgImageRef.current) return false;
+
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = 1;
+    tempCanvas.height = 1;
+
+    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+    if (!tempCtx) return false;
+
+    try {
+      tempCtx.drawImage(
+          bgImageRef.current,
+          px, py, 1, 1,
+          0, 0, 1, 1
+      );
+
+      const [r, g, b, a] = tempCtx.getImageData(0, 0, 1, 1).data;
+      return a > 0 && r >= 245 && g >= 245 && b >= 245;
+    } catch (e) {
+      return false;
+    }
+  }, []);
+
+  useEffect(() => {
+    objectsRef.current = objects;
+  }, [objects]);
+
+  useEffect(() => {
+    floorRef.current = floor;
+  }, [floor]);
 
   const fetchObjects = useCallback(async () => {
     try {
       const res = await fetch(`/api/paint?floor=${floorRef.current}`);
       const json = await res.json();
+
       if (json.success) {
         setObjects(json.data);
       }
-    } catch(e) {}
+    } catch (e) {}
   }, []);
 
   const handleFloorChange = useCallback((newFloor) => {
@@ -91,13 +121,12 @@ export default function Home() {
       pendingPixelsRef.current = [];
       setSelectedObjectId(null);
       selectedObjectIdRef.current = null;
+
       fetchObjects().then(() => {
         setIsFading(false);
       });
-    }, 300); // 300ms fade duration
+    }, 300);
   }, [fetchObjects]);
-
-
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -107,6 +136,7 @@ export default function Home() {
         handleFloorChange(floorRef.current + 1);
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleFloorChange]);
@@ -129,10 +159,13 @@ export default function Home() {
     if (!canvas) return { x: nx, y: ny, scale: ns };
 
     const { width, height } = imageSizeRef.current;
-    const minScale = Math.max(canvas.width / width, canvas.height / height);
+
+    const minScale = width > height
+        ? canvas.width / width
+        : canvas.height / height;
+
     const scale = Math.max(minScale, Math.min(ns, 50));
 
-    // Calculate bounds based on the *actual* scale being applied
     const minX = canvas.width - width * scale;
     const maxX = 0;
     const minY = canvas.height - height * scale;
@@ -150,15 +183,11 @@ export default function Home() {
 
     const { width, height } = imageSizeRef.current;
 
-    const minScale = Math.max(
-        canvas.width / width,
-        canvas.height / height
-    );
-
-
+    const minScale = width > height
+        ? canvas.width / width
+        : canvas.height / height;
 
     const initScale = minScale;
-
     const initX = (canvas.width - width * initScale) / 2;
     const initY = (canvas.height - height * initScale) / 2;
 
@@ -168,66 +197,150 @@ export default function Home() {
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !dataCanvasRef.current || !bgImageRef.current) return;
+
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const { x, y, scale } = transformRef.current;
+
     ctx.save();
     ctx.translate(x, y);
     ctx.scale(scale, scale);
 
     const { width, height } = imageSizeRef.current;
 
-    // Draw the background image
     ctx.drawImage(bgImageRef.current, 0, 0, width, height);
-
-    // Draw the painted pixels
     ctx.drawImage(dataCanvasRef.current, 0, 0);
 
-    // Draw pending pixels
-    pendingPixelsRef.current.forEach(p => {
+    const drawInnerBorder = (ctx, x, y, size, thickness, color) => {
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, size, thickness);
+      ctx.fillRect(x, y + size - thickness, size, thickness);
+      ctx.fillRect(x, y + thickness, thickness, size - thickness * 2);
+      ctx.fillRect(x + size - thickness, y + thickness, thickness, size - thickness * 2);
+    };
+
+    const time = performance.now() / 1000;
+    const pulse = 0.5 + Math.sin(time * 5) * 0.5;
+    const innerBorder = Math.max(0.08, Math.min(0.22, 1.0 / scale));
+
+    pendingPixelsRef.current.forEach((p) => {
       ctx.fillStyle = p.color;
       ctx.fillRect(p.x, p.y, 1, 1);
+
+      const innerGlowThickness = innerBorder;
+      const inset = innerBorder;
+
+      if (1 - inset * 2 > 0 && innerGlowThickness > 0) {
+        drawInnerBorder(
+            ctx,
+            p.x,
+            p.y,
+            1,
+            innerGlowThickness,
+            `rgba(255, 255, 255, ${0.6 + pulse * 0.2})`
+        );
+      }
     });
 
-    // Draw selected highlight
     if (selectedObjectIdRef.current) {
-      const obj = objectsRef.current.find(o => o._id === selectedObjectIdRef.current);
+      const obj = objectsRef.current.find((o) => o._id === selectedObjectIdRef.current);
+
       if (obj) {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-        obj.pixels.forEach(p => {
+
+        obj.pixels.forEach((p) => {
           ctx.fillRect(p.x, p.y, 1, 1);
         });
 
         ctx.strokeStyle = 'white';
+
         const prevLineWidth = ctx.lineWidth;
         ctx.lineWidth = 2 / scale;
+
         ctx.beginPath();
-        obj.pixels.forEach(p => {
+
+        obj.pixels.forEach((p) => {
           ctx.rect(p.x, p.y, 1, 1);
         });
+
         ctx.stroke();
         ctx.lineWidth = prevLineWidth;
       }
     }
 
-    if (isPaintModeRef.current && hoverPixelRef.current) {
-      ctx.fillStyle = colorRef.current;
-      ctx.globalAlpha = 0.6;
-      ctx.fillRect(hoverPixelRef.current.x, hoverPixelRef.current.y, 1, 1);
-      ctx.globalAlpha = 1.0;
+    if (hoverPixelRef.current) {
+      const { x: hx, y: hy } = hoverPixelRef.current;
 
-      const prevLineWidth = ctx.lineWidth;
-      ctx.lineWidth = 1 / scale;
-      ctx.strokeStyle = 'black';
-      ctx.strokeRect(hoverPixelRef.current.x, hoverPixelRef.current.y, 1, 1);
-      ctx.lineWidth = prevLineWidth;
+      if (isPaintModeRef.current) {
+        if (floorRef.current === 1 || !isWhiteBackgroundPixel(hx, hy)) {
+          const cursorBorder = Math.max(0.08, Math.min(0.2, 1.3 / scale));
+
+          ctx.globalAlpha = 0.6;
+          ctx.fillStyle = colorRef.current;
+          ctx.fillRect(hx, hy, 1, 1);
+          ctx.globalAlpha = 1.0;
+
+          const inset = cursorBorder;
+          const whiteThickness = cursorBorder;
+
+          if (1 - inset * 2 > 0 && whiteThickness > 0) {
+            drawInnerBorder(
+                ctx,
+                hx,
+                hy,
+                1,
+                whiteThickness,
+                'rgba(255, 255, 255, 0.95)'
+            );
+          }
+        }
+      } else {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.fillRect(hx, hy, 1, 1);
+      }
     }
 
     ctx.restore();
-  }, []);
+  }, [isWhiteBackgroundPixel]);
+
+  const updateHoverPixelFromClient = useCallback((clientX, clientY) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+
+    const rect = canvas.getBoundingClientRect();
+
+    const cursorX = clientX - rect.left;
+    const cursorY = clientY - rect.top;
+
+    const { x, y, scale } = transformRef.current;
+
+    const pixelX = Math.floor((cursorX - x) / scale);
+    const pixelY = Math.floor((cursorY - y) / scale);
+
+    const { width, height } = imageSizeRef.current;
+
+    if (pixelX >= 0 && pixelX < width && pixelY >= 0 && pixelY < height) {
+      hoverPixelRef.current = {
+        x: pixelX,
+        y: pixelY
+      };
+
+      render();
+
+      return {
+        x: pixelX,
+        y: pixelY
+      };
+    }
+
+    hoverPixelRef.current = null;
+    render();
+
+    return null;
+  }, [render]);
 
   const setColor = (c) => {
     setColorState(c);
@@ -235,18 +348,14 @@ export default function Home() {
     render();
   };
 
-
-
   const setIsPaintMode = (m) => {
     setIsPaintModeState(m);
     isPaintModeRef.current = m;
 
-    // Paint 모드에 들어가는 순간 = 그림 그리기 시작 시간
     if (m) {
       paintStartedAtRef.current = new Date().toISOString();
     }
 
-    // Paint 모드에서 나가면 임시 픽셀과 시작 시간 초기화
     if (!m) {
       setPendingPixels([]);
       pendingPixelsRef.current = [];
@@ -281,25 +390,28 @@ export default function Home() {
       } else {
         alert(data.error || 'Failed to save');
       }
-    } catch(e) {
+    } catch (e) {
       alert('Error saving painting');
     }
   };
 
   const deleteSelected = async () => {
     if (!selectedObjectId) return;
+
     try {
-      const res = await fetch(`/api/paint/${selectedObjectId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/paint/${selectedObjectId}`, {
+        method: 'DELETE'
+      });
+
       const data = await res.json();
+
       if (data.success) {
         setSelectedObjectId(null);
         selectedObjectIdRef.current = null;
         fetchObjects();
       }
-    } catch(e) {}
+    } catch (e) {}
   };
-
-
 
   const openLeaderboard = async (type) => {
     setLeaderboardType(type);
@@ -307,7 +419,6 @@ export default function Home() {
     setLeaderboardData(null);
     setAnimateBars(false);
     setShowFullLeaderboard(false);
-
     setActiveLeaderboardTab("personalPixelRanking");
 
     try {
@@ -340,6 +451,25 @@ export default function Home() {
   };
 
   useEffect(() => {
+    const animate = () => {
+      if (isPaintModeRef.current) {
+        render();
+        animationFrameRef.current = requestAnimationFrame(animate);
+      }
+    };
+
+    if (isPaintMode) {
+      animationFrameRef.current = requestAnimationFrame(animate);
+    }
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, [isPaintMode, render]);
+
+  useEffect(() => {
     if (!leaderboardType) return;
 
     setAnimateBars(false);
@@ -354,15 +484,17 @@ export default function Home() {
 
   const redrawDataCanvas = useCallback(() => {
     if (!dataCanvasRef.current || !bgImageRef.current) return;
+
     const { width, height } = imageSizeRef.current;
 
     dataCanvasRef.current.width = width;
     dataCanvasRef.current.height = height;
+
     const dctx = dataCanvasRef.current.getContext('2d');
     dctx.clearRect(0, 0, width, height);
 
-    objectsRef.current.forEach(obj => {
-      obj.pixels.forEach(p => {
+    objectsRef.current.forEach((obj) => {
+      obj.pixels.forEach((p) => {
         dctx.fillStyle = p.color;
         dctx.fillRect(p.x, p.y, 1, 1);
       });
@@ -410,6 +542,7 @@ export default function Home() {
 
     img.onload = () => {
       bgImageRef.current = img;
+
       imageSizeRef.current = {
         width: img.width,
         height: img.height
@@ -423,7 +556,6 @@ export default function Home() {
       dataCanvasRef.current = dataCanvas;
 
       resetTransformToImage();
-
       redrawDataCanvas();
       setIsImageLoaded(true);
 
@@ -448,8 +580,6 @@ export default function Home() {
     };
   }, [floor, redrawDataCanvas, render, resetTransformToImage]);
 
-
-
   useEffect(() => {
     if (!isImageLoaded) return;
 
@@ -459,24 +589,29 @@ export default function Home() {
         canvasRef.current.height = containerRef.current.clientHeight;
 
         const { width, height } = imageSizeRef.current;
-
-        // Initial centering
         const { x, y, scale } = transformRef.current;
+
         if (x === 0 && y === 0 && scale === 1) {
-           const minScale = Math.max(canvasRef.current.width / width, canvasRef.current.height / height);
-           const initScale = Math.max(1, minScale);
-           const initX = (canvasRef.current.width - width * initScale) / 2;
-           const initY = (canvasRef.current.height - height * initScale) / 2;
-           transformRef.current = clampTransform(initX, initY, initScale);
+          const minScale = width > height
+              ? canvasRef.current.width / width
+              : canvasRef.current.height / height;
+
+          const initScale = minScale;
+          const initX = (canvasRef.current.width - width * initScale) / 2;
+          const initY = (canvasRef.current.height - height * initScale) / 2;
+
+          transformRef.current = clampTransform(initX, initY, initScale);
         } else {
-           transformRef.current = clampTransform(x, y, scale);
+          transformRef.current = clampTransform(x, y, scale);
         }
 
         render();
       }
     };
+
     window.addEventListener('resize', resize);
     resize();
+
     return () => window.removeEventListener('resize', resize);
   }, [render, clampTransform, isImageLoaded]);
 
@@ -484,14 +619,24 @@ export default function Home() {
     if (!isImageLoaded) return;
     if (e.target.closest('.admin-tooltip')) return;
 
-    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    pointersRef.current.set(e.pointerId, {
+      x: e.clientX,
+      y: e.clientY
+    });
+
     canvasRef.current.setPointerCapture(e.pointerId);
 
     if (pointersRef.current.size === 2 && !isPaintModeRef.current) {
       isPinchingRef.current = true;
       isDraggingRef.current = false;
+
       const pts = Array.from(pointersRef.current.values());
-      pinchStartDistRef.current = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+
+      pinchStartDistRef.current = Math.hypot(
+          pts[0].x - pts[1].x,
+          pts[0].y - pts[1].y
+      );
+
       pinchStartScaleRef.current = transformRef.current.scale;
       return;
     }
@@ -499,29 +644,55 @@ export default function Home() {
     if (pointersRef.current.size === 1) {
       isDraggingRef.current = true;
       draggedRef.current = false;
-      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+      lastMousePosRef.current = {
+        x: e.clientX,
+        y: e.clientY
+      };
+
+      if (isPaintModeRef.current) {
+        updateHoverPixelFromClient(e.clientX, e.clientY);
+      }
     }
   };
 
   const handlePointerMove = (e) => {
     if (!isImageLoaded) return;
-    if (!pointersRef.current.has(e.pointerId)) return;
 
-    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    if (!pointersRef.current.has(e.pointerId)) {
+      updateHoverPixelFromClient(e.clientX, e.clientY);
+      return;
+    }
+
+    pointersRef.current.set(e.pointerId, {
+      x: e.clientX,
+      y: e.clientY
+    });
 
     if (isPinchingRef.current && pointersRef.current.size === 2) {
       const pts = Array.from(pointersRef.current.values());
-      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      const scaleFactor = dist / pinchStartDistRef.current;
-      let newScale = Math.min(Math.max(pinchStartScaleRef.current * scaleFactor, 0.001), 50);
 
-      const canvas = canvasRef.current;
+      const dist = Math.hypot(
+          pts[0].x - pts[1].x,
+          pts[0].y - pts[1].y
+      );
+
+      const scaleFactor = dist / pinchStartDistRef.current;
+
+      const newScale = Math.min(
+          Math.max(pinchStartScaleRef.current * scaleFactor, 0.001),
+          50
+      );
+
       const rect = canvas.getBoundingClientRect();
-      
+
       const cx = (pts[0].x + pts[1].x) / 2 - rect.left;
       const cy = (pts[0].y + pts[1].y) / 2 - rect.top;
 
       const { x, y, scale } = transformRef.current;
+
       const newX = cx - (cx - x) * (newScale / scale);
       const newY = cy - (cy - y) * (newScale / scale);
 
@@ -539,108 +710,91 @@ export default function Home() {
       }
 
       if (isPaintModeRef.current) {
-        const rect = canvasRef.current.getBoundingClientRect();
-        const cursorX = e.clientX - rect.left;
-        const cursorY = e.clientY - rect.top;
+        const pixel = updateHoverPixelFromClient(e.clientX, e.clientY);
 
-        const { x, y, scale } = transformRef.current;
-        const pixelX = Math.floor((cursorX - x) / scale);
-        const pixelY = Math.floor((cursorY - y) / scale);
-
-        const { width, height } = imageSizeRef.current;
-        if (pixelX >= 0 && pixelX < width && pixelY >= 0 && pixelY < height) {
-          paintPixel(pixelX, pixelY, colorRef.current);
-          if (!hoverPixelRef.current || hoverPixelRef.current.x !== pixelX || hoverPixelRef.current.y !== pixelY) {
-            hoverPixelRef.current = { x: pixelX, y: pixelY };
-          }
+        if (pixel) {
+          paintPixel(pixel.x, pixel.y, colorRef.current);
         }
       } else {
         const { x, y, scale } = transformRef.current;
         transformRef.current = clampTransform(x + dx, y + dy, scale);
       }
-      
-      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+
+      lastMousePosRef.current = {
+        x: e.clientX,
+        y: e.clientY
+      };
+
       render();
       return;
     }
 
-    // Hover logic for non-dragging state
-    const rect = canvasRef.current.getBoundingClientRect();
-    const cursorX = e.clientX - rect.left;
-    const cursorY = e.clientY - rect.top;
-
-    const { x, y, scale } = transformRef.current;
-    const pixelX = Math.floor((cursorX - x) / scale);
-    const pixelY = Math.floor((cursorY - y) / scale);
-
-    const { width, height } = imageSizeRef.current;
-    if (pixelX >= 0 && pixelX < width && pixelY >= 0 && pixelY < height) {
-      if (!hoverPixelRef.current || hoverPixelRef.current.x !== pixelX || hoverPixelRef.current.y !== pixelY) {
-        hoverPixelRef.current = { x: pixelX, y: pixelY };
-        render();
-      }
-    } else {
-      if (hoverPixelRef.current) {
-        hoverPixelRef.current = null;
-        render();
-      }
-    }
+    updateHoverPixelFromClient(e.clientX, e.clientY);
   };
 
   const handlePointerUp = (e) => {
     if (!isImageLoaded) return;
 
     const wasPinching = isPinchingRef.current;
-    
+
     pointersRef.current.delete(e.pointerId);
+
     try {
       canvasRef.current.releasePointerCapture(e.pointerId);
-    } catch(err) {}
+    } catch (err) {}
 
     if (pointersRef.current.size < 2) {
       isPinchingRef.current = false;
     }
 
-    // If we just finished a pinch, don't do anything else
     if (wasPinching && !isPinchingRef.current) {
       isDraggingRef.current = false;
       return;
     }
 
     if (isDraggingRef.current && !draggedRef.current) {
-      // This was a click/tap, not a drag
       const rect = canvasRef.current.getBoundingClientRect();
+
       const clickX = e.clientX - rect.left;
       const clickY = e.clientY - rect.top;
 
       const { x, y, scale } = transformRef.current;
+
       const pixelX = Math.floor((clickX - x) / scale);
       const pixelY = Math.floor((clickY - y) / scale);
 
       const { width, height } = imageSizeRef.current;
+
       if (pixelX >= 0 && pixelX < width && pixelY >= 0 && pixelY < height) {
         if (isPaintMode) {
           paintPixel(pixelX, pixelY, color);
         } else if (isAdmin) {
           let clickedId = null;
+
           for (let i = objectsRef.current.length - 1; i >= 0; i--) {
             const obj = objectsRef.current[i];
-            if (obj.pixels.find(p => p.x === pixelX && p.y === pixelY)) {
+
+            if (obj.pixels.find((p) => p.x === pixelX && p.y === pixelY)) {
               clickedId = obj._id;
               break;
             }
           }
+
           if (clickedId !== selectedObjectIdRef.current) {
             setSelectedObjectId(clickedId);
             selectedObjectIdRef.current = clickedId;
+
             if (clickedId) {
-              setTooltipPos({ x: e.clientX, y: e.clientY });
+              setTooltipPos({
+                x: e.clientX,
+                y: e.clientY
+              });
             }
           } else {
-            // Deselect if clicking the same object again
             setSelectedObjectId(null);
             selectedObjectIdRef.current = null;
           }
+
           render();
         }
       }
@@ -649,30 +803,38 @@ export default function Home() {
     if (pointersRef.current.size === 0) {
       isDraggingRef.current = false;
     }
+
     draggedRef.current = false;
   };
 
   const handleWheel = useCallback((e) => {
     if (!isImageLoaded) return;
+
     e.preventDefault();
+
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const { x, y, scale } = transformRef.current;
 
-    // Ctrl+스크롤: 확대/축소, 일반 스크롤: 위아래 이동
     if (e.ctrlKey) {
-      // 확대/축소 모드
       const rect = canvas.getBoundingClientRect();
+
       const cursorX = e.clientX - rect.left;
       const cursorY = e.clientY - rect.top;
 
       const zoomFactor = 1.1;
-      let newScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor;
 
-      // 최소/최대 축소 레벨 적용
+      let newScale = e.deltaY < 0
+          ? scale * zoomFactor
+          : scale / zoomFactor;
+
       const { width, height } = imageSizeRef.current;
-      const minScale = Math.max(canvas.width / width, canvas.height / height);
+
+      const minScale = width > height
+          ? canvas.width / width
+          : canvas.height / height;
+
       newScale = Math.max(minScale, Math.min(newScale, 50));
 
       const newX = cursorX - (cursorX - x) * (newScale / scale);
@@ -680,20 +842,24 @@ export default function Home() {
 
       transformRef.current = clampTransform(newX, newY, newScale);
     } else {
-      // 위아래 이동 모드
-      const scrollAmount = 20; // 스크롤 감도 조절
-      const newY = e.deltaY > 0 ? y - scrollAmount : y + scrollAmount;
+      const scrollAmount = 20;
+      const newY = e.deltaY > 0
+          ? y - scrollAmount
+          : y + scrollAmount;
 
       transformRef.current = clampTransform(x, newY, scale);
     }
+
     render();
   }, [render, clampTransform, isImageLoaded]);
 
   const handlePointerOut = (e) => {
     pointersRef.current.delete(e.pointerId);
+
     if (pointersRef.current.size < 2) {
       isPinchingRef.current = false;
     }
+
     if (pointersRef.current.size === 0) {
       isDraggingRef.current = false;
     }
@@ -710,17 +876,22 @@ export default function Home() {
       return;
     }
 
-    // 1층이 아닐 때는 배경의 흰색 픽셀 위에 색칠 금지
     if (floorRef.current !== 1 && isWhiteBackgroundPixel(px, py)) {
       return;
     }
 
-    const existingIdx = pendingPixelsRef.current.findIndex(p => p.x === px && p.y === py);
+    const existingIdx = pendingPixelsRef.current.findIndex(
+        (p) => p.x === px && p.y === py
+    );
 
     if (existingIdx !== -1) {
       pendingPixelsRef.current[existingIdx].color = paintColor;
     } else {
-      pendingPixelsRef.current.push({ x: px, y: py, color: paintColor });
+      pendingPixelsRef.current.push({
+        x: px,
+        y: py,
+        color: paintColor
+      });
     }
 
     setPendingPixels([...pendingPixelsRef.current]);
@@ -729,19 +900,31 @@ export default function Home() {
 
   const getTouchDistance = (touches) => {
     if (touches.length < 2) return 0;
+
     const dx = touches[0].clientX - touches[1].clientX;
     const dy = touches[0].clientY - touches[1].clientY;
+
     return Math.sqrt(dx * dx + dy * dy);
   };
 
   const getTouchCenter = (touches) => {
-    if (touches.length === 0) return { x: 0, y: 0 };
-    let sumX = 0, sumY = 0;
+    if (touches.length === 0) return {
+      x: 0,
+      y: 0
+    };
+
+    let sumX = 0;
+    let sumY = 0;
+
     for (let touch of touches) {
       sumX += touch.clientX;
       sumY += touch.clientY;
     }
-    return { x: sumX / touches.length, y: sumY / touches.length };
+
+    return {
+      x: sumX / touches.length,
+      y: sumY / touches.length
+    };
   };
 
   const handleTouchStart = (e) => {
@@ -754,6 +937,7 @@ export default function Home() {
   const handleTouchMove = (e) => {
     if (e.touches.length === 2) {
       e.preventDefault();
+
       const canvas = canvasRef.current;
       if (!canvas) return;
 
@@ -766,12 +950,22 @@ export default function Home() {
       }
 
       const { x, y, scale } = transformRef.current;
+
       const zoomFactor = newDistance / oldDistance;
+
       let newScale = scale * zoomFactor;
-      newScale = Math.max(Math.max(canvas.width / imageSizeRef.current.width, canvas.height / imageSizeRef.current.height), Math.min(newScale, 50));
+
+      const { width, height } = imageSizeRef.current;
+
+      const minScale = width > height
+          ? canvas.width / width
+          : canvas.height / height;
+
+      newScale = Math.max(minScale, Math.min(newScale, 50));
 
       const touchCenter = getTouchCenter(e.touches);
       const rect = canvas.getBoundingClientRect();
+
       const cursorX = touchCenter.x - rect.left;
       const cursorY = touchCenter.y - rect.top;
 
@@ -780,21 +974,35 @@ export default function Home() {
 
       transformRef.current = clampTransform(newX, newY, newScale);
       lastTouchDistanceRef.current = newDistance;
+
       render();
     }
   };
 
-  const handleTouchEnd = (e) => {
+  const handleTouchEnd = () => {
     lastTouchDistanceRef.current = 0;
   };
 
   useEffect(() => {
     const canvas = canvasRef.current;
+
     if (canvas) {
-      canvas.addEventListener('wheel', handleWheel, { passive: false });
-      canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
-      canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
-      canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+      canvas.addEventListener('wheel', handleWheel, {
+        passive: false
+      });
+
+      canvas.addEventListener('touchstart', handleTouchStart, {
+        passive: false
+      });
+
+      canvas.addEventListener('touchmove', handleTouchMove, {
+        passive: false
+      });
+
+      canvas.addEventListener('touchend', handleTouchEnd, {
+        passive: false
+      });
+
       return () => {
         canvas.removeEventListener('wheel', handleWheel);
         canvas.removeEventListener('touchstart', handleTouchStart);
@@ -805,454 +1013,515 @@ export default function Home() {
   }, [handleWheel]);
 
   return (
-    <div className="flex flex-col h-screen w-full bg-gray-50 text-black font-sans overflow-hidden">
-      {/* Top Floating Buttons */}
-      <div className="absolute top-4 right-4 z-20 flex items-center gap-3">
-        <button
-            onClick={() => openLeaderboard("user")}
-            className="w-12 h-12 bg-white hover:bg-gray-100 text-black border border-gray-200 rounded-full shadow-md font-bold transition-colors flex items-center justify-center text-lg"
-            title="리더보드"
-        >
-          🏆
-        </button>
+      <div className="flex flex-col h-screen w-full bg-gray-50 text-black font-sans overflow-hidden">
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-3">
+          <button
+              onClick={() => openLeaderboard("user")}
+              className="w-12 h-12 bg-white hover:bg-gray-100 text-black border border-gray-200 rounded-full shadow-md font-bold transition-colors flex items-center justify-center text-lg"
+              title="리더보드"
+          >
+            🏆
+          </button>
 
-        <button
-            onClick={() => setShowHelpModal(true)}
-            className="w-12 h-12 bg-white hover:bg-gray-100 text-black border border-gray-200 rounded-full shadow-md font-black transition-colors flex items-center justify-center text-xl"
-            title="사용 설명"
-        >
-          ?
-        </button>
+          <button
+              onClick={() => setShowHelpModal(true)}
+              className="w-12 h-12 bg-white hover:bg-gray-100 text-black border border-gray-200 rounded-full shadow-md font-black transition-colors flex items-center justify-center text-xl"
+              title="사용 설명"
+          >
+            ?
+          </button>
 
-        {isAdmin && (
-            <button
-                onClick={() => openLeaderboard("admin")}
-                className="w-12 h-12 bg-yellow-100 hover:bg-yellow-200 text-black border border-yellow-300 rounded-full shadow-md font-bold transition-colors flex items-center justify-center text-lg"
-                title="관리자 리더보드"
-            >
-              👑
-            </button>
-        )}
+          {isAdmin && (
+              <button
+                  onClick={() => openLeaderboard("admin")}
+                  className="w-12 h-12 bg-yellow-100 hover:bg-yellow-200 text-black border border-yellow-300 rounded-full shadow-md font-bold transition-colors flex items-center justify-center text-lg"
+                  title="관리자 리더보드"
+              >
+                👑
+              </button>
+          )}
 
-        {session ? (
-            <button
-                onClick={() => {
-                  if (window.confirm('로그아웃 하시겠습니까?')) signOut();
-                }}
-                className="w-12 h-12 bg-white hover:bg-gray-100 text-black border border-gray-200 rounded-full shadow-md font-bold transition-colors flex items-center justify-center text-xs"
-                title="로그아웃"
-            >
-              {session.user.name?.slice(-3) || 'OUT'}
-            </button>
-        ) : (
-            <button
-                onClick={() => signIn('google')}
-                className="w-12 h-12 bg-white hover:bg-gray-100 border border-gray-200 rounded-full shadow-md transition-colors flex items-center justify-center"
-                title="구글 로그인"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="24px" height="24px">
-                <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
-                <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
-                <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
-                <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
-              </svg>
-            </button>
-        )}
-      </div>
-
-      {/* Floor Slider UI */}
-      <div className="absolute top-4 left-4 z-20 flex flex-col items-center gap-2 bg-white/90 backdrop-blur shadow-xl border border-gray-200 p-3 rounded-2xl">
-        <span className="text-sm font-bold text-gray-700">층</span>
-        <div className="flex flex-col gap-1 items-center bg-gray-100 p-1 rounded-xl">
-          {[5, 4, 3, 2, 1].map((f) => (
-            <button
-              key={f}
-              onClick={() => handleFloorChange(f)}
-              className={`w-8 h-8 rounded-lg font-bold text-sm transition-colors ${floor === f ? 'bg-blue-500 text-white shadow-md' : 'text-gray-500 hover:bg-gray-200'}`}
-              title={`${f}층으로 이동`}
-            >
-              {f}F
-            </button>
-          ))}
+          {session ? (
+              <button
+                  onClick={() => {
+                    if (window.confirm('로그아웃 하시겠습니까?')) signOut();
+                  }}
+                  className="w-12 h-12 bg-white hover:bg-gray-100 text-black border border-gray-200 rounded-full shadow-md font-bold transition-colors flex items-center justify-center text-xs"
+                  title="로그아웃"
+              >
+                {session.user.name?.slice(-3) || 'OUT'}
+              </button>
+          ) : (
+              <button
+                  onClick={() => signIn('google')}
+                  className="w-12 h-12 bg-white hover:bg-gray-100 border border-gray-200 rounded-full shadow-md transition-colors flex items-center justify-center"
+                  title="구글 로그인"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="24px" height="24px">
+                  <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z" />
+                  <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z" />
+                  <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z" />
+                  <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z" />
+                </svg>
+              </button>
+          )}
         </div>
-        <span className="text-xs text-gray-400 mt-1">Q(↓) E(↑)</span>
-      </div>
 
-      {showModal && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full text-black mx-4">
-            <h2 className="text-2xl font-bold mb-5 text-gray-800">⚠ 읽어주세요!</h2>
-            <h2 className="mb-5 text-gray-800">The Place에 오신 것을 환영합니다. 아래 사항들을 읽고, The Place를 즐겨주시면 좋겠습니다.</h2>
-            <ul className="list-disc pl-5 space-y-3 mb-8 text-gray-600">
-              <li>The Place는 SASA의 학생들이 <a className="underline font-bold">자유롭게</a> SASA를 색칠할 수 있는 온라인 공간입니다. SASA의 공간에 여러분들의 용기, 도전, 꿈을 마음껏 표현해주세요.</li>
-              <li>그러나 The Place는 접속한 모두가 볼 수 있는 <a className="underline font-bold">공용 캔버스</a>이기도 합니다. 이 사실에 유념하여 이용해주세요. 관리자는 부적절한 그림을 삭제할 수 있습니다!</li>
-              <li>모두 확인하였다면, 아래 '확인했습니다' 버튼을 누르고 The Place 이용을 시작해주세요.</li>
-            </ul>
-            <button onClick={() => setShowModal(false)} className="w-full py-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-600 transition-colors shadow-sm">
-              확인했습니다
-            </button>
+        <div className="absolute top-4 left-4 z-20 flex flex-col items-center gap-2 bg-white/90 backdrop-blur shadow-xl border border-gray-200 p-3 rounded-2xl">
+          <span className="text-sm font-bold text-gray-700">층</span>
+
+          <div className="flex flex-col gap-1 items-center bg-gray-100 p-1 rounded-xl">
+            {[5, 4, 3, 2, 1].map((f) => (
+                <button
+                    key={f}
+                    onClick={() => handleFloorChange(f)}
+                    className={`w-8 h-8 rounded-lg font-bold text-sm transition-colors ${
+                        floor === f
+                            ? 'bg-blue-500 text-white shadow-md'
+                            : 'text-gray-500 hover:bg-gray-200'
+                    }`}
+                    title={`${f}층으로 이동`}
+                >
+                  {f}F
+                </button>
+            ))}
           </div>
-        </div>
-      )}
 
-      {showHelpModal && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-            <div className="bg-white rounded-3xl shadow-2xl w-[95vw] max-w-5xl max-h-[85vh] overflow-hidden text-black flex flex-col">              <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
-                <div>
-                  <h2 className="text-2xl sm:text-3xl font-black tracking-tight">
-                    이용 안내
-                  </h2>
-                  <p className="text-sm text-gray-500 mt-1">
-                    The Place
-                  </p>
-                </div>
+          <span className="text-xs text-gray-400 mt-1">Q(↓) E(↑)</span>
+        </div>
+
+        {showModal && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+              <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full text-black mx-4">
+                <h2 className="text-2xl font-bold mb-5 text-gray-800">⚠ 읽어주세요!</h2>
+
+                <h2 className="mb-5 text-gray-800">
+                  The Place에 오신 것을 환영합니다. 아래 사항들을 읽고, The Place를 즐겨주시면 좋겠습니다.
+                </h2>
+
+                <ul className="list-disc pl-5 space-y-3 mb-8 text-gray-600">
+                  <li>
+                    The Place는 SASA의 학생들이 <a className="underline font-bold">자유롭게</a> SASA를 색칠할 수 있는 온라인 공간입니다. SASA의 공간에 여러분들의 용기, 도전, 꿈을 마음껏 표현해주세요.
+                  </li>
+                  <li>
+                    그러나 The Place는 접속한 모두가 볼 수 있는 <a className="underline font-bold">공용 캔버스</a>이기도 합니다. 이 사실에 유념하여 이용해주세요. 관리자는 부적절한 그림을 삭제할 수 있습니다!
+                  </li>
+                  <li>
+                    모두 확인하였다면, 아래 '확인했습니다' 버튼을 누르고 The Place 이용을 시작해주세요.
+                  </li>
+                </ul>
 
                 <button
-                    onClick={() => setShowHelpModal(false)}
-                    className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 font-bold shrink-0"
+                    onClick={() => setShowModal(false)}
+                    className="w-full py-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-600 transition-colors shadow-sm"
                 >
-                  ✕
+                  확인했습니다
                 </button>
-              </div>
-
-              <div className="p-6 overflow-y-auto flex-1 min-h-0 space-y-7">
-                <section>
-                  <h3 className="text-xl font-black mb-3 flex items-center gap-2">
-                    🎨 그리기
-                  </h3>
-
-                  <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
-                    <li>
-                      화면 하단의 <strong>그리기</strong> 버튼을 눌러 그리기를 시작하세요.
-                      팔레트에 있는 다양한 색을 선택해 학교 공간 위에 그림을 그릴 수 있습니다.
-                    </li>
-                    <li>
-                      원하는 위치를 클릭하거나 드래그하면 픽셀 단위로 색을 칠할 수 있습니다.
-                    </li>
-                    <li>
-                      그리기가 끝나면 <strong>그리기 완료</strong> 버튼을 눌러 그림을 학교 공간 위에 게시하세요.
-                    </li>
-                    <li>
-                      <strong>그리기 완료</strong> 버튼을 누르지 않고 팔레트의 <strong>✕</strong> 버튼을 누르면,
-                      그리던 그림은 저장되지 않고 사라집니다.
-                    </li>
-                    <li>
-                      1층이 아닌 층에서는 배경의 흰색 영역 위에는 그림을 그릴 수 없습니다.
-                      학교 공간이 있는 부분 위에만 색칠할 수 있습니다.
-                    </li>
-                  </ul>
-                </section>
-
-                <section>
-                  <h3 className="text-xl font-black mb-3 flex items-center gap-2">
-                    🏫 캔버스
-                  </h3>
-
-                  <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
-                    <li>
-                      The Place의 캔버스는 <strong>학교 공간</strong>입니다.
-                    </li>
-                    <li>
-                      <strong>컴퓨터:</strong> Ctrl + 마우스 휠로 확대/축소, 일반 마우스 휠로 위아래 이동, 드래그로 수평 이동이 가능합니다.
-                    </li>
-                    <li>
-                      <strong>모바일:</strong> 두 손가락으로 화면을 벌리거나 오므려 확대/축소, 드래그로 이동이 가능합니다.
-                    </li>
-                    <li>
-                      화면 왼쪽 위의 층 선택 버튼을 눌러 <strong>1층부터 5층까지</strong> 수직적으로 이동할 수 있습니다.
-                    </li>
-                    <li>
-                      키보드 단축키도 사용할 수 있습니다.
-                      <strong> Q</strong> 키를 누르면 아래층으로, <strong>E</strong> 키를 누르면 위층으로 이동합니다.
-                    </li>
-                  </ul>
-                </section>
-
-                <section>
-                  <h3 className="text-xl font-black mb-3 flex items-center gap-2">
-                    🏆 리더보드
-                  </h3>
-
-                  <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
-                    <li>
-                      화면 오른쪽 위의 <strong>🏆</strong> 플로팅 버튼을 눌러 리더보드를 확인할 수 있습니다.
-                    </li>
-                    <li>
-                      리더보드에서는 <strong>개인별 픽셀 수</strong>, <strong>반별 픽셀 수</strong>,
-                      <strong> 학년별 픽셀 수</strong>, <strong>층별 픽셀 수</strong> 순위를 볼 수 있습니다.
-                    </li>
-                    <li>
-                      개인별 순위에서는 상위 10명과 자신의 순위를 먼저 확인할 수 있고,
-                      <strong> 전체 보기</strong> 버튼을 누르면 전체 순위를 볼 수 있습니다.
-                    </li>
-                    <li>
-                      리더보드 결과에 따라 추후 상품이 증정될 예정입니다.
-                    </li>
-                  </ul>
-                </section>
-
-                <section>
-                  <h3 className="text-xl font-black mb-3 flex items-center gap-2">
-                    ⚠️ 이용 안내
-                  </h3>
-
-                  <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
-                    <li>
-                      The Place는 모두가 함께 보는 공용 캔버스입니다.
-                      다른 사람이 불쾌감을 느낄 수 있는 그림이나 글은 남기지 말아 주세요.
-                    </li>
-                    <li>
-                      관리자는 부적절한 그림을 삭제할 수 있습니다.
-                    </li>
-                    <li>
-                      SASA의 공간에 여러분의 <strong>용기, 도전, 꿈</strong>을 자유롭게 표현해 주세요.
-                    </li>
-                  </ul>
-                </section>
               </div>
             </div>
-          </div>
-      )}
+        )}
 
-      {leaderboardType && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm">
-            <div className="bg-white rounded-3xl shadow-2xl w-[96vw] h-[90vh] max-w-6xl overflow-hidden text-black flex flex-col">
-              <div className="flex items-start justify-between px-5 sm:px-7 py-5 border-b border-gray-100">
-                <div>
-                  <h2 className="text-2xl sm:text-3xl font-black tracking-tight">
-                    {leaderboardType === "admin" ? "관리자 리더보드" : "리더보드"}
-                  </h2>
-                  <p className="text-sm text-gray-500 mt-1">
-                    The Place 활동 순위
-                  </p>
+        {showHelpModal && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+              <div className="bg-white rounded-3xl shadow-2xl w-[95vw] max-w-5xl max-h-[85vh] overflow-hidden text-black flex flex-col">
+                <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+                  <div>
+                    <h2 className="text-2xl sm:text-3xl font-black tracking-tight">
+                      이용 안내
+                    </h2>
+
+                    <p className="text-sm text-gray-500 mt-1">
+                      The Place
+                    </p>
+                  </div>
+
+                  <button
+                      onClick={() => setShowHelpModal(false)}
+                      className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 font-bold shrink-0"
+                  >
+                    ✕
+                  </button>
                 </div>
 
-                <button
-                    onClick={closeLeaderboard}
-                    className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 font-bold shrink-0"
-                >
-                  ✕
-                </button>
-              </div>
+                <div className="p-6 overflow-y-auto flex-1 min-h-0 space-y-7">
+                  <section>
+                    <h3 className="text-xl font-black mb-3 flex items-center gap-2">
+                      🎨 그리기
+                    </h3>
 
-              {leaderboardLoading && (
-                  <div className="p-10 text-center text-gray-500">
-                    리더보드를 불러오는 중...
+                    <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
+                      <li>
+                        화면 하단의 <strong>그리기</strong> 버튼을 눌러 그리기를 시작하세요.
+                        팔레트에 있는 다양한 색을 선택해 학교 공간 위에 그림을 그릴 수 있습니다.
+                      </li>
+                      <li>
+                        원하는 위치를 클릭하거나 드래그하면 픽셀 단위로 색을 칠할 수 있습니다.
+                      </li>
+                      <li>
+                        그리기가 끝나면 <strong>그리기 완료</strong> 버튼을 눌러 그림을 학교 공간 위에 게시하세요.
+                      </li>
+                      <li>
+                        <strong>그리기 완료</strong> 버튼을 누르지 않고 팔레트의 <strong>✕</strong> 버튼을 누르면,
+                        그리던 그림은 저장되지 않고 사라집니다.
+                      </li>
+                      <li>
+                        1층이 아닌 층에서는 배경의 흰색 영역 위에는 그림을 그릴 수 없습니다.
+                        학교 공간이 있는 부분 위에만 색칠할 수 있습니다.
+                      </li>
+                    </ul>
+                  </section>
+
+                  <section>
+                    <h3 className="text-xl font-black mb-3 flex items-center gap-2">
+                      🏫 캔버스
+                    </h3>
+
+                    <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
+                      <li>
+                        The Place의 캔버스는 <strong>학교 공간</strong>입니다.
+                      </li>
+                      <li>
+                        <strong>컴퓨터:</strong> Ctrl + 마우스 휠로 확대/축소, 일반 마우스 휠로 위아래 이동, 드래그로 수평 이동이 가능합니다.
+                      </li>
+                      <li>
+                        <strong>모바일:</strong> 두 손가락으로 화면을 벌리거나 오므려 확대/축소, 드래그로 이동이 가능합니다.
+                      </li>
+                      <li>
+                        화면 왼쪽 위의 층 선택 버튼을 눌러 <strong>1층부터 5층까지</strong> 수직적으로 이동할 수 있습니다.
+                      </li>
+                      <li>
+                        키보드 단축키도 사용할 수 있습니다.
+                        <strong> Q</strong> 키를 누르면 아래층으로, <strong>E</strong> 키를 누르면 위층으로 이동합니다.
+                      </li>
+                    </ul>
+                  </section>
+
+                  <section>
+                    <h3 className="text-xl font-black mb-3 flex items-center gap-2">
+                      🏆 리더보드
+                    </h3>
+
+                    <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
+                      <li>
+                        화면 오른쪽 위의 <strong>🏆</strong> 플로팅 버튼을 눌러 리더보드를 확인할 수 있습니다.
+                      </li>
+                      <li>
+                        리더보드에서는 <strong>개인별 픽셀 수</strong>, <strong>반별 픽셀 수</strong>,
+                        <strong> 학년별 픽셀 수</strong>, <strong>층별 픽셀 수</strong> 순위를 볼 수 있습니다.
+                      </li>
+                      <li>
+                        개인별 순위에서는 상위 10명과 자신의 순위를 먼저 확인할 수 있고,
+                        <strong> 전체 보기</strong> 버튼을 누르면 전체 순위를 볼 수 있습니다.
+                      </li>
+                      <li>
+                        리더보드 결과에 따라 추후 상품이 증정될 예정입니다.
+                      </li>
+                    </ul>
+                  </section>
+
+                  <section>
+                    <h3 className="text-xl font-black mb-3 flex items-center gap-2">
+                      ⚠️ 이용 안내
+                    </h3>
+
+                    <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
+                      <li>
+                        The Place는 모두가 함께 보는 공용 캔버스입니다.
+                        다른 사람이 불쾌감을 느낄 수 있는 그림이나 글은 남기지 말아 주세요.
+                      </li>
+                      <li>
+                        관리자는 부적절한 그림을 삭제할 수 있습니다.
+                      </li>
+                      <li>
+                        SASA의 공간에 여러분의 <strong>용기, 도전, 꿈</strong>을 자유롭게 표현해 주세요.
+                      </li>
+                    </ul>
+                  </section>
+                </div>
+              </div>
+            </div>
+        )}
+
+        {leaderboardType && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm">
+              <div className="bg-white rounded-3xl shadow-2xl w-[96vw] h-[90vh] max-w-6xl overflow-hidden text-black flex flex-col">
+                <div className="flex items-start justify-between px-5 sm:px-7 py-5 border-b border-gray-100">
+                  <div>
+                    <h2 className="text-2xl sm:text-3xl font-black tracking-tight">
+                      {leaderboardType === "admin" ? "관리자 리더보드" : "리더보드"}
+                    </h2>
+
+                    <p className="text-sm text-gray-500 mt-1">
+                      The Place 활동 순위
+                    </p>
+                  </div>
+
+                  <button
+                      onClick={closeLeaderboard}
+                      className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 font-bold shrink-0"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {leaderboardLoading && (
+                    <div className="p-10 text-center text-gray-500">
+                      리더보드를 불러오는 중...
+                    </div>
+                )}
+
+                {!leaderboardLoading && leaderboardData && (
+                    <>
+                      <div className="px-4 sm:px-6 py-4 border-b border-gray-100">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
+                          {leaderboardType === "admin" ? (
+                              <>
+                                <LeaderboardTabButton
+                                    id="personalPixelRanking"
+                                    label="개인 픽셀"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+
+                                <LeaderboardTabButton
+                                    id="personalTimeRanking"
+                                    label="개인 시간"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+
+                                <LeaderboardTabButton
+                                    id="personalSpeedRanking"
+                                    label="픽셀/시간"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+
+                                <LeaderboardTabButton
+                                    id="classPixelRanking"
+                                    label="반별 픽셀"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+
+                                <LeaderboardTabButton
+                                    id="gradePixelRanking"
+                                    label="학년별 픽셀"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+
+                                <LeaderboardTabButton
+                                    id="floorPixelRanking"
+                                    label="층별 픽셀"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+
+                                <LeaderboardTabButton
+                                    id="editedPixelRanking"
+                                    label="수정 위치"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+                              </>
+                          ) : (
+                              <>
+                                <LeaderboardTabButton
+                                    id="personalPixelRanking"
+                                    label="개인 픽셀"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+
+                                <LeaderboardTabButton
+                                    id="classPixelRanking"
+                                    label="반별 픽셀"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+
+                                <LeaderboardTabButton
+                                    id="gradePixelRanking"
+                                    label="학년별 픽셀"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+
+                                <LeaderboardTabButton
+                                    id="floorPixelRanking"
+                                    label="층별 픽셀"
+                                    activeLeaderboardTab={activeLeaderboardTab}
+                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
+                                />
+                              </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="p-4 sm:p-6 overflow-y-auto flex-1 min-h-0">
+                        <LeaderboardList
+                            items={leaderboardData[activeLeaderboardTab] || []}
+                            activeTab={activeLeaderboardTab}
+                            animateBars={animateBars}
+                            currentUserEmail={currentUserEmail}
+                            showFullLeaderboard={showFullLeaderboard}
+                            setShowFullLeaderboard={setShowFullLeaderboard}
+                            onMoveToPixel={moveToPixel}
+                        />
+                      </div>
+                    </>
+                )}
+              </div>
+            </div>
+        )}
+
+        <div
+            className={`absolute inset-0 z-10 bg-white transition-opacity duration-300 pointer-events-none ${
+                isFading
+                    ? 'opacity-100'
+                    : 'opacity-0'
+            }`}
+        />
+
+        <div
+            ref={containerRef}
+            className="flex-1 relative overflow-hidden bg-gray-200"
+            style={{
+              touchAction: 'none'
+            }}
+        >
+          <canvas
+              ref={canvasRef}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerLeave={handlePointerOut}
+              onPointerCancel={handlePointerOut}
+              className={`absolute top-0 left-0 w-full h-full touch-none ${
+                  isPaintMode
+                      ? 'cursor-crosshair'
+                      : isDraggingRef.current && !isPaintMode
+                          ? 'cursor-grabbing'
+                          : 'cursor-grab'
+              }`}
+          />
+
+          {isAdmin && selectedObjectId && (() => {
+            const selectedObject = objects.find((o) => o._id === selectedObjectId);
+
+            if (!selectedObject) return null;
+
+            return (
+                <div
+                    className="admin-tooltip absolute z-30 bg-white/95 p-3 rounded-xl shadow-lg border border-gray-200 pointer-events-auto flex flex-col gap-2"
+                    style={{
+                      left: tooltipPos.x + 15,
+                      top: tooltipPos.y + 15
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <div className="text-sm">
+                    <p>
+                      <strong>작성자:</strong> {selectedObject.userEmail || '알수없음'}
+                    </p>
+
+                    <p>
+                      <strong>크기:</strong> {selectedObject.pixels.length} 픽셀
+                    </p>
+
+                    <p>
+                      <strong>시작 시간:</strong>{' '}
+                      {selectedObject.paintStartedAt
+                          ? new Date(selectedObject.paintStartedAt).toLocaleString()
+                          : '기록 없음'}
+                    </p>
+
+                    <p>
+                      <strong>게시 시간:</strong>{' '}
+                      {selectedObject.postedAt
+                          ? new Date(selectedObject.postedAt).toLocaleString()
+                          : '기록 없음'}
+                    </p>
+
+                    <p>
+                      <strong>소요 시간:</strong>{' '}
+                      {selectedObject.durationSeconds != null
+                          ? `${selectedObject.durationSeconds}초`
+                          : '기록 없음'}
+                    </p>
+                  </div>
+
+                  <button
+                      onClick={deleteSelected}
+                      className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded font-bold text-xs shadow-sm"
+                  >
+                    이 객체 삭제
+                  </button>
+                </div>
+            );
+          })()}
+
+          <div
+              className={`absolute bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] sm:bottom-4 left-1/2 -translate-x-1/2 z-20 transition-all duration-300 ${
+                  isPaintMode
+                      ? 'w-[95%] max-w-md'
+                      : 'w-auto'
+              }`}
+          >
+            <div className="relative flex items-center justify-center bg-white/90 backdrop-blur-lg shadow-2xl border border-gray-200 rounded-2xl md:rounded-3xl p-3">
+              {!isPaintMode && (
+                  <button
+                      onClick={() => session ? setIsPaintMode(true) : signIn('google')}
+                      className="px-8 py-2.5 rounded-full font-bold transition-transform hover:scale-105 active:scale-95 whitespace-nowrap bg-blue-500 text-white shadow-md"
+                  >
+                    그리기
+                  </button>
+              )}
+
+              {isPaintMode && (
+                  <div className="w-full flex flex-col items-center gap-3 animate-in fade-in duration-300">
+                    <div className="flex flex-wrap justify-center gap-2 px-1">
+                      {PALETTE.map((c) => (
+                          <button
+                              key={c}
+                              onClick={() => setColor(c)}
+                              className={`w-7 h-7 rounded-full border-2 transition-transform shadow-sm ${
+                                  color === c
+                                      ? 'border-blue-500 scale-125 z-10'
+                                      : 'border-white hover:scale-110'
+                              }`}
+                              style={{
+                                backgroundColor: c
+                              }}
+                              aria-label={`Select color ${c}`}
+                          />
+                      ))}
+                    </div>
+
+                    {pendingPixels.length > 0 && (
+                        <button
+                            onClick={savePainting}
+                            className="w-full px-6 py-3 rounded-xl font-bold transition-colors whitespace-nowrap bg-green-500 hover:bg-green-600 text-white shadow-lg"
+                        >
+                          그리기 완료!
+                        </button>
+                    )}
                   </div>
               )}
 
-              {!leaderboardLoading && leaderboardData && (
-                  <>
-                    <div className="px-4 sm:px-6 py-4 border-b border-gray-100">
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
-                        {leaderboardType === "admin" ? (
-                            <>
-                              <LeaderboardTabButton
-                                  id="personalPixelRanking"
-                                  label="개인 픽셀"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                              <LeaderboardTabButton
-                                  id="personalTimeRanking"
-                                  label="개인 시간"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                              <LeaderboardTabButton
-                                  id="personalSpeedRanking"
-                                  label="픽셀/시간"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                              <LeaderboardTabButton
-                                  id="classPixelRanking"
-                                  label="반별 픽셀"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                              <LeaderboardTabButton
-                                  id="gradePixelRanking"
-                                  label="학년별 픽셀"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                              <LeaderboardTabButton
-                                  id="floorPixelRanking"
-                                  label="층별 픽셀"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                              <LeaderboardTabButton
-                                  id="editedPixelRanking"
-                                  label="수정 위치"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                            </>
-                        ) : (
-                            <>
-                              <LeaderboardTabButton
-                                  id="personalPixelRanking"
-                                  label="개인 픽셀"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                              <LeaderboardTabButton
-                                  id="classPixelRanking"
-                                  label="반별 픽셀"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                              <LeaderboardTabButton
-                                  id="gradePixelRanking"
-                                  label="학년별 픽셀"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                              <LeaderboardTabButton
-                                  id="floorPixelRanking"
-                                  label="층별 픽셀"
-                                  activeLeaderboardTab={activeLeaderboardTab}
-                                  setActiveLeaderboardTab={setActiveLeaderboardTab}
-                              />
-                            </>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="p-4 sm:p-6 overflow-y-auto flex-1 min-h-0">
-                      <LeaderboardList
-                          items={leaderboardData[activeLeaderboardTab] || []}
-                          activeTab={activeLeaderboardTab}
-                          animateBars={animateBars}
-                          currentUserEmail={currentUserEmail}
-                          showFullLeaderboard={showFullLeaderboard}
-                          setShowFullLeaderboard={setShowFullLeaderboard}
-                          onMoveToPixel={moveToPixel}
-                      />
-                    </div>
-                  </>
+              {isPaintMode && (
+                  <button
+                      onClick={() => setIsPaintMode(false)}
+                      className="absolute -top-3 -right-3 w-8 h-8 bg-gray-800 text-white hover:bg-black rounded-full flex items-center justify-center font-bold shadow-lg border-2 border-white transition-colors"
+                  >
+                    ✕
+                  </button>
               )}
             </div>
           </div>
-      )}
-
-      {/* Fade Overlay */}
-      <div
-        className={`absolute inset-0 z-10 bg-white transition-opacity duration-300 pointer-events-none ${isFading ? 'opacity-100' : 'opacity-0'}`}
-      />
-
-      <div
-        ref={containerRef}
-        className="flex-1 relative overflow-hidden bg-gray-200"
-        style={{ touchAction: 'none' }}
-      >
-        <canvas
-          ref={canvasRef}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerLeave={handlePointerOut}
-          onPointerCancel={handlePointerOut}
-          className={`absolute top-0 left-0 w-full h-full touch-none ${isPaintMode ? 'cursor-crosshair' : (isDraggingRef.current && !isPaintMode ? 'cursor-grabbing' : 'cursor-grab')}`}
-        />
-
-        {isAdmin && selectedObjectId && (
-          (() => {
-            const selectedObject = objects.find(o => o._id === selectedObjectId);
-            if (!selectedObject) return null;
-            return (
-              <div
-                className="admin-tooltip absolute z-30 bg-white/95 p-3 rounded-xl shadow-lg border border-gray-200 pointer-events-auto flex flex-col gap-2"
-                style={{
-                  left: tooltipPos.x + 15,
-                  top: tooltipPos.y + 15
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-              >
-                <div className="text-sm">
-                  <p><strong>작성자:</strong> {selectedObject.userEmail || '알수없음'}</p>
-                  <p><strong>크기:</strong> {selectedObject.pixels.length} 픽셀</p>
-                  <p>
-                    <strong>시작 시간:</strong>{' '}
-                    {selectedObject.paintStartedAt
-                        ? new Date(selectedObject.paintStartedAt).toLocaleString()
-                        : '기록 없음'}
-                  </p>
-                  <p>
-                    <strong>게시 시간:</strong>{' '}
-                    {selectedObject.postedAt
-                        ? new Date(selectedObject.postedAt).toLocaleString()
-                        : '기록 없음'}
-                  </p>
-                  <p>
-                    <strong>소요 시간:</strong>{' '}
-                    {selectedObject.durationSeconds != null
-                        ? `${selectedObject.durationSeconds}초`
-                        : '기록 없음'}
-                  </p>
-                </div>
-                <button
-                  onClick={deleteSelected}
-                  className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded font-bold text-xs shadow-sm"
-                >
-                  이 객체 삭제
-                </button>
-              </div>
-            );
-          })()
-        )}
-
-        {/* Bottom Panel */}
-        <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-20 transition-all duration-300 ${isPaintMode ? 'w-[95%] max-w-md' : 'w-auto'}`}>
-          <div className="relative flex items-center justify-center bg-white/90 backdrop-blur-lg shadow-2xl border border-gray-200 rounded-2xl md:rounded-3xl p-3">
-            
-            {!isPaintMode && (
-              <button
-                onClick={() => session ? setIsPaintMode(true) : signIn('google')}
-                className="px-8 py-2.5 rounded-full font-bold transition-transform hover:scale-105 active:scale-95 whitespace-nowrap bg-blue-500 text-white shadow-md"
-              >
-                그리기
-              </button>
-            )}
-
-            {isPaintMode && (
-              <div className="w-full flex flex-col items-center gap-3 animate-in fade-in duration-300">
-                <div className="flex flex-wrap justify-center gap-2 px-1">
-                  {PALETTE.map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => setColor(c)}
-                      className={`w-7 h-7 rounded-full border-2 transition-transform shadow-sm ${color === c ? 'border-blue-500 scale-125 z-10' : 'border-white hover:scale-110'}`}
-                      style={{ backgroundColor: c }}
-                      aria-label={`Select color ${c}`}
-                    />
-                  ))}
-                </div>
-                {pendingPixels.length > 0 && (
-                  <button
-                    onClick={savePainting}
-                    className="w-full px-6 py-3 rounded-xl font-bold transition-colors whitespace-nowrap bg-green-500 hover:bg-green-600 text-white shadow-lg"
-                  >
-                    그리기 완료!
-                  </button>
-                )}
-              </div>
-            )}
-
-            {isPaintMode && (
-              <button
-                onClick={() => setIsPaintMode(false)}
-                className="absolute -top-3 -right-3 w-8 h-8 bg-gray-800 text-white hover:bg-black rounded-full flex items-center justify-center font-bold shadow-lg border-2 border-white transition-colors"
-              >
-                ✕
-              </button>
-            )}
-          </div>
         </div>
       </div>
-    </div>
   );
 }
 
@@ -1310,13 +1579,12 @@ function LeaderboardList({
 
   const top10 = itemsWithRank.slice(0, 10);
 
-  const myItem =
-      currentUserEmail
-          ? itemsWithRank.find((item) => {
-            if (!item.subLabel) return false;
-            return item.subLabel.includes(currentUserEmail);
-          })
-          : null;
+  const myItem = currentUserEmail
+      ? itemsWithRank.find((item) => {
+        if (!item.subLabel) return false;
+        return item.subLabel.includes(currentUserEmail);
+      })
+      : null;
 
   let visibleItems;
 
@@ -1328,6 +1596,7 @@ function LeaderboardList({
         type: "divider",
         label: "내 순위"
       });
+
       visibleItems.push(myItem);
     }
   } else {
@@ -1436,7 +1705,9 @@ function LeaderboardRow({
             }
           }}
           className={`grid ${rowGridClass} items-center gap-2 sm:gap-3 ${rowPaddingClass} transition-colors ${
-              isMine ? "bg-blue-50 rounded-2xl px-3 -mx-3" : ""
+              isMine
+                  ? "bg-blue-50 rounded-2xl px-3 -mx-3"
+                  : ""
           } ${
               canMoveToPixel
                   ? "cursor-pointer hover:bg-blue-50 rounded-2xl px-3 -mx-3"
@@ -1451,6 +1722,7 @@ function LeaderboardRow({
         <div className="min-w-0">
           <div className="font-bold truncate text-gray-900 text-sm sm:text-base">
             {item.label}
+
             {isMine && (
                 <span className="ml-2 text-xs text-blue-600 font-black">
               ME
@@ -1463,12 +1735,6 @@ function LeaderboardRow({
                 {item.subLabel}
               </div>
           )}
-
-          {/*{canMoveToPixel && (*/}
-          {/*    <div className="hidden sm:block text-xs text-blue-500 font-bold mt-0.5">*/}
-          {/*      클릭하면 해당 위치로 이동*/}
-          {/*    </div>*/}
-          {/*)}*/}
         </div>
 
         <div className="text-right text-xs sm:text-base font-black text-gray-800 whitespace-nowrap">
