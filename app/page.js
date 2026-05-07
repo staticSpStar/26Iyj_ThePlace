@@ -2121,10 +2121,30 @@ function LeaderboardList({
 
   const isPersonalTab = personalTabs.includes(activeTab);
 
-  const itemsWithRank = items.map((item, index) => ({
-    ...item,
-    rank: index + 1
-  }));
+  const pixelTabs = [
+    "personalPixelRanking",
+    "classPixelRanking",
+    "gradePixelRanking",
+    "floorPixelRanking"
+  ];
+
+  const isPixelTab = pixelTabs.includes(activeTab);
+
+  const itemsWithRank = items.map((item, index) => {
+    const currentValue = Number(item.value) || 0;
+    const prevValue = index > 0 ? Number(items[index - 1].value) || 0 : null;
+
+    const pixelsToNextRank =
+      isPixelTab && prevValue != null
+        ? Math.max(0, prevValue - currentValue + 1)
+        : null;
+
+    return {
+      ...item,
+      rank: index + 1,
+      pixelsToNextRank
+    };
+  });
 
   const top10 = itemsWithRank.slice(0, 10);
 
@@ -2237,14 +2257,26 @@ function LeaderboardRow({
       item.y != null &&
       onMoveToPixel;
 
-  const medal =
-      item.rank === 1
-          ? "🥇"
-          : item.rank === 2
-              ? "🥈"
-              : item.rank === 3
-                  ? "🥉"
-                  : item.rank;
+  const pixelTabs = [
+    "personalPixelRanking",
+    "classPixelRanking",
+    "gradePixelRanking",
+    "floorPixelRanking"
+  ];
+
+  const isPixelTab = pixelTabs.includes(activeTab);
+
+  const rankDisplay = isPixelTab
+    ? item.rank === 1
+      ? "TOP"
+      : `+${item.pixelsToNextRank ?? 0}`
+    : item.rank === 1
+      ? "🥇"
+      : item.rank === 2
+        ? "🥈"
+        : item.rank === 3
+          ? "🥉"
+          : item.rank;
 
   return (
       <div
@@ -2265,7 +2297,13 @@ function LeaderboardRow({
           title={canMoveToPixel ? "이 위치로 이동" : undefined}
       >
         <div className="text-center font-black text-gray-700">
-          {medal}
+          {rankDisplay}
+
+          {isPixelTab && item.rank !== 1 && (
+            <div className="text-[10px] font-bold text-gray-400 leading-tight">
+              픽셀
+            </div>
+          )}
         </div>
 
         <div className="min-w-0">
