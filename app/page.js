@@ -29,6 +29,9 @@ export default function Home() {
   const [isEraserMode, setIsEraserMode] = useState(false);
   const [isPaintMode, setIsPaintModeState] = useState(false);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
+  const [isHeatmapMode, setIsHeatmapMode] = useState(false);
+  const [isAnimationMode, setIsAnimationMode] = useState(false);
+  const [animationProgress, setAnimationProgress] = useState(0);
 
   const [objects, setObjects] = useState([]);
   const [pendingPixels, setPendingPixels] = useState([]);
@@ -51,8 +54,13 @@ export default function Home() {
   const colorRef = useRef(PALETTE[6]);
   const isPaintModeRef = useRef(false);
   const isEraserModeRef = useRef(false);
+  const isHeatmapModeRef = useRef(false);
   const hoverPixelRef = useRef(null);
   const animationFrameRef = useRef(null);
+  const isAnimationModeRef = useRef(false);
+  const animationProgressRef = useRef(0);
+  const animationStartedAtRef = useRef(0);
+  const animationFrameLoopRef = useRef(null);
   const floorRef = useRef(1);
   const floorChangeTimerRef = useRef(null);
   const paintStartedAtRef = useRef(null);
@@ -72,6 +80,9 @@ export default function Home() {
   const isPinchingRef = useRef(false);
   const pinchStartDistRef = useRef(0);
   const pinchStartScaleRef = useRef(1);
+  const pinchStartCenterRef = useRef({ x: 0, y: 0 });
+  const pinchStartTransformRef = useRef({ x: 0, y: 0, scale: 1 });
+  const hadMultiTouchRef = useRef(false);
 
   const paletteDragRef = useRef({
     dragging: false,
@@ -248,16 +259,127 @@ export default function Home() {
     transformRef.current = clampTransform(initX, initY, initScale);
   }, [clampTransform, getFitScale]);
 
+  const drawHeatmap = useCallback((ctx, width, height, sourceObjects = objectsRef.current) => {
+    const counts = new Map();
+
+    sourceObjects.forEach((obj) => {
+      if (!obj.pixels) return;
+
+      obj.pixels.forEach((p) => {
+        const key = `${p.x},${p.y}`;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      });
+    });
+
+    if (counts.size === 0) return;
+
+    const maxCount = Math.max(...counts.values());
+
+    counts.forEach((count, key) => {
+      const [x, y] = key.split(',').map(Number);
+
+      if (x < 0 || y < 0 || x >= width || y >= height) return;
+
+      const ratio = count / maxCount;
+
+      const gray = Math.round(255 * (1 - ratio));
+
+      ctx.fillStyle = `rgb(255, ${gray}, ${gray})`;
+      ctx.fillRect(x, y, 1, 1);
+    });
+  }, []);
+
+  const getObjectTime = (obj) => {
+    const time =
+      obj.postedAt ||
+      obj.createdAt ||
+      obj.paintStartedAt ||
+      obj.updatedAt ||
+      0;
+
+    const parsed = new Date(time).getTime();
+
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const getSortedObjectsForAnimation = useCallback(() => {
+    return [...objectsRef.current].sort((a, b) => {
+      const ta = getObjectTime(a);
+      const tb = getObjectTime(b);
+
+      if (ta !== tb) return ta - tb;
+
+      return String(a._id || '').localeCompare(String(b._id || ''));
+    });
+  }, []);
+
+  const drawAnimationFrame = useCallback((ctx, progress) => {
+    const sortedObjects = getSortedObjectsForAnimation();
+
+    if (sortedObjects.length === 0) return;
+
+    const visibleCount = Math.max(
+      0,
+      Math.min(
+        sortedObjects.length,
+        Math.floor(progress * sortedObjects.length)
+      )
+    );
+
+    for (let i = 0; i < visibleCount; i++) {
+      const obj = sortedObjects[i];
+
+      if (!obj.pixels) continue;
+
+      obj.pixels.forEach((p) => {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, 1, 1);
+      });
+    }
+
+    const fractionalIndex = progress * sortedObjects.length;
+    const currentIndex = Math.floor(fractionalIndex);
+    const localAlpha = fractionalIndex - currentIndex;
+
+    const currentObj = sortedObjects[currentIndex];
+
+    if (currentObj?.pixels && localAlpha > 0) {
+      const prevAlpha = ctx.globalAlpha;
+
+      ctx.globalAlpha = Math.max(0.15, Math.min(1, localAlpha));
+      currentObj.pixels.forEach((p) => {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, 1, 1);
+      });
+
+      ctx.globalAlpha = prevAlpha;
+    }
+  }, [getSortedObjectsForAnimation]);
+
+  const getAnimatedVisibleObjects = useCallback((progress) => {
+    const sortedObjects = getSortedObjectsForAnimation();
+
+    if (sortedObjects.length === 0) return [];
+
+    const visibleCount = Math.max(
+      0,
+      Math.min(
+        sortedObjects.length,
+        Math.floor(progress * sortedObjects.length)
+      )
+    );
+
+    return sortedObjects.slice(0, visibleCount);
+  }, [getSortedObjectsForAnimation]);
+
   const drawInsetPixelMarker = (ctx, px, py, fillColor, scale) => {
     const whiteBorder = Math.max(0.055, Math.min(0.15, 0.9 / scale));
     const blackBorder = Math.max(0.055, Math.min(0.13, 0.75 / scale));
 
-    // 0. 먼저 원래 색을 픽셀 전체에 깔기
     ctx.globalAlpha = 1.0;
     ctx.fillStyle = fillColor;
     ctx.fillRect(px, py, 1, 1);
 
-    // 1. 바깥 흰색 테두리
     ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
 
     ctx.fillRect(px, py, 1, whiteBorder); // 위
@@ -268,9 +390,8 @@ export default function Home() {
       py + whiteBorder,
       whiteBorder,
       1 - whiteBorder * 2
-    ); // 오른쪽
+    );
 
-    // 2. 안쪽 검은색 테두리
     const blackInset = whiteBorder;
     const blackSize = 1 - blackInset * 2;
 
@@ -284,21 +405,20 @@ export default function Home() {
       py + blackInset + blackSize - blackBorder,
       blackSize,
       blackBorder
-    ); // 아래
+    );
     ctx.fillRect(
       px + blackInset,
       py + blackInset + blackBorder,
       blackBorder,
       blackSize - blackBorder * 2
-    ); // 왼쪽
+    );
     ctx.fillRect(
       px + blackInset + blackSize - blackBorder,
       py + blackInset + blackBorder,
       blackBorder,
       blackSize - blackBorder * 2
-    ); // 오른쪽
+    );
 
-    // 3. 중앙 원래 색
     const colorInset = whiteBorder + blackBorder;
     const colorSize = 1 - colorInset * 2;
 
@@ -333,8 +453,27 @@ export default function Home() {
 
       const { width, height } = imageSizeRef.current;
 
-      ctx.drawImage(bgImageRef.current, 0, 0, width, height);
-      ctx.drawImage(dataCanvasRef.current, 0, 0);
+      if (isHeatmapModeRef.current) {
+        ctx.globalAlpha = 0.25;
+        ctx.drawImage(bgImageRef.current, 0, 0, width, height);
+        ctx.globalAlpha = 1.0;
+
+        if (isAnimationModeRef.current) {
+          const visibleObjects = getAnimatedVisibleObjects(animationProgressRef.current);
+          drawHeatmap(ctx, width, height, visibleObjects);
+        } else {
+          drawHeatmap(ctx, width, height);
+        }
+      } else {
+        ctx.globalAlpha = 1.0;
+        ctx.drawImage(bgImageRef.current, 0, 0, width, height);
+
+        if (isAnimationModeRef.current) {
+          drawAnimationFrame(ctx, animationProgressRef.current);
+        } else {
+          ctx.drawImage(dataCanvasRef.current, 0, 0);
+        }
+      }
 
       pendingPixelsRef.current.forEach((p) => {
         drawInsetPixelMarker(ctx, p.x, p.y, p.color, scale);
@@ -395,7 +534,7 @@ export default function Home() {
       }
 
       ctx.restore();
-    }, [isWhiteBackgroundPixel]);
+    }, [isWhiteBackgroundPixel, drawHeatmap, drawAnimationFrame, getAnimatedVisibleObjects]);
 
   const updateHoverPixelFromClient = useCallback((clientX, clientY) => {
     const canvas = canvasRef.current;
@@ -468,6 +607,49 @@ export default function Home() {
       pendingPixelsRef.current = [];
       paintStartedAtRef.current = null;
       setPalettePos(null);
+    }
+
+    render();
+  };
+
+  const setAnimationMode = (nextMode) => {
+    if (!isAdmin) return;
+
+    setIsAnimationMode(nextMode);
+    isAnimationModeRef.current = nextMode;
+
+    if (nextMode) {
+      setIsPaintMode(false);
+
+      setSelectedObjectId(null);
+      selectedObjectIdRef.current = null;
+
+      hoverPixelRef.current = null;
+
+      animationProgressRef.current = 0;
+      setAnimationProgress(0);
+      animationStartedAtRef.current = performance.now();
+    } else {
+      animationProgressRef.current = 0;
+      setAnimationProgress(0);
+    }
+
+    render();
+  };
+
+  const setHeatmapMode = (nextMode) => {
+    if (!isAdmin) return;
+
+    setIsHeatmapMode(nextMode);
+    isHeatmapModeRef.current = nextMode;
+
+    if (nextMode) {
+      setIsPaintMode(false);
+
+      setSelectedObjectId(null);
+      selectedObjectIdRef.current = null;
+
+      hoverPixelRef.current = null;
     }
 
     render();
@@ -681,6 +863,52 @@ export default function Home() {
   };
 
   useEffect(() => {
+    if (!isAnimationMode) {
+      if (animationFrameLoopRef.current) {
+        cancelAnimationFrame(animationFrameLoopRef.current);
+        animationFrameLoopRef.current = null;
+      }
+
+      return;
+    }
+
+    const duration = 8000;
+
+    const tick = (now) => {
+      if (!isAnimationModeRef.current) return;
+
+      const elapsed = now - animationStartedAtRef.current;
+      const progress = (elapsed % duration) / duration;
+
+      animationProgressRef.current = progress;
+
+      setAnimationProgress(progress);
+
+      render();
+
+      animationFrameLoopRef.current = requestAnimationFrame(tick);
+    };
+
+    animationStartedAtRef.current = performance.now();
+    animationFrameLoopRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (animationFrameLoopRef.current) {
+        cancelAnimationFrame(animationFrameLoopRef.current);
+        animationFrameLoopRef.current = null;
+      }
+    };
+  }, [isAnimationMode, render]);
+
+  useEffect(() => {
+    if (!isAdmin && isHeatmapModeRef.current) {
+      setIsHeatmapMode(false);
+      isHeatmapModeRef.current = false;
+      render();
+    }
+  }, [isAdmin, render]);
+
+  useEffect(() => {
     const animate = () => {
       if (isPaintModeRef.current) {
         render();
@@ -852,22 +1080,36 @@ export default function Home() {
 
     canvasRef.current.setPointerCapture(e.pointerId);
 
-    if (pointersRef.current.size === 2) {
+    if (pointersRef.current.size >= 2) {
       isPinchingRef.current = true;
       isDraggingRef.current = false;
       draggedRef.current = true;
+      hadMultiTouchRef.current = true;
 
-      // 두 손가락 조작 중에는 페인트 커서 제거
       hoverPixelRef.current = null;
 
-      const pts = Array.from(pointersRef.current.values());
+      const pts = Array.from(pointersRef.current.values()).slice(0, 2);
+      const rect = canvasRef.current.getBoundingClientRect();
 
-      pinchStartDistRef.current = Math.hypot(
-          pts[0].x - pts[1].x,
-          pts[0].y - pts[1].y
+      const dist = Math.hypot(
+        pts[0].x - pts[1].x,
+        pts[0].y - pts[1].y
       );
 
+      const centerX = (pts[0].x + pts[1].x) / 2 - rect.left;
+      const centerY = (pts[0].y + pts[1].y) / 2 - rect.top;
+
+      pinchStartDistRef.current = dist;
       pinchStartScaleRef.current = transformRef.current.scale;
+
+      pinchStartCenterRef.current = {
+        x: centerX,
+        y: centerY
+      };
+
+      pinchStartTransformRef.current = {
+        ...transformRef.current
+      };
 
       render();
       return;
@@ -905,32 +1147,45 @@ export default function Home() {
 
     if (isPinchingRef.current && pointersRef.current.size >= 2) {
       const pts = Array.from(pointersRef.current.values()).slice(0, 2);
-
-      const dist = Math.hypot(
-          pts[0].x - pts[1].x,
-          pts[0].y - pts[1].y
-      );
-
-      const scaleFactor = dist / pinchStartDistRef.current;
-
-      const newScale = Math.min(
-          Math.max(pinchStartScaleRef.current * scaleFactor, 0.001),
-          50
-      );
-
       const rect = canvas.getBoundingClientRect();
 
-      const cx = (pts[0].x + pts[1].x) / 2 - rect.left;
-      const cy = (pts[0].y + pts[1].y) / 2 - rect.top;
+      const dist = Math.hypot(
+        pts[0].x - pts[1].x,
+        pts[0].y - pts[1].y
+      );
 
-      const { x, y, scale } = transformRef.current;
+      const currentCenterX = (pts[0].x + pts[1].x) / 2 - rect.left;
+      const currentCenterY = (pts[0].y + pts[1].y) / 2 - rect.top;
 
-      const newX = cx - (cx - x) * (newScale / scale);
-      const newY = cy - (cy - y) * (newScale / scale);
+      const scaleFactor = dist / pinchStartDistRef.current;
+      const rawScale = pinchStartScaleRef.current * scaleFactor;
+
+      const { width, height } = imageSizeRef.current;
+      const minScale = getFitScale(canvas, width, height);
+
+      const newScale = Math.max(
+        minScale,
+        Math.min(rawScale, 50)
+      );
+
+      const startCenter = pinchStartCenterRef.current;
+      const startTransform = pinchStartTransformRef.current;
+
+      const scaleRatio = newScale / startTransform.scale;
+
+      const newX =
+        currentCenterX -
+        (startCenter.x - startTransform.x) * scaleRatio;
+
+      const newY =
+        currentCenterY -
+        (startCenter.y - startTransform.y) * scaleRatio;
 
       transformRef.current = clampTransform(newX, newY, newScale);
 
       hoverPixelRef.current = null;
+      draggedRef.current = true;
+      hadMultiTouchRef.current = true;
 
       render();
       return;
@@ -948,9 +1203,7 @@ export default function Home() {
         const pixel = updateHoverPixelFromClient(e.clientX, e.clientY);
 
         if (pixel) {
-          paintPixel(pixel.x, pixel.y, colorRef.current, {
-            allowDelete: false
-          });
+          paintPixel(pixel.x, pixel.y, colorRef.current);
         }
       } else {
         const { x, y, scale } = transformRef.current;
@@ -984,8 +1237,16 @@ export default function Home() {
       isPinchingRef.current = false;
     }
 
-    if (wasPinching && !isPinchingRef.current) {
+    if (wasPinching || hadMultiTouchRef.current) {
       isDraggingRef.current = false;
+      draggedRef.current = true;
+      hoverPixelRef.current = null;
+
+      if (pointersRef.current.size === 0) {
+        hadMultiTouchRef.current = false;
+      }
+
+      render();
       return;
     }
 
@@ -1005,7 +1266,7 @@ export default function Home() {
       if (pixelX >= 0 && pixelX < width && pixelY >= 0 && pixelY < height) {
         if (isPaintMode) {
           paintPixel(pixelX, pixelY, color);
-        } else if (isAdmin) {
+        } else if (isAdmin && !isHeatmapModeRef.current) {
           let clickedId = null;
 
           for (let i = objectsRef.current.length - 1; i >= 0; i--) {
@@ -1039,6 +1300,8 @@ export default function Home() {
 
     if (pointersRef.current.size === 0) {
       isDraggingRef.current = false;
+      isPinchingRef.current = false;
+      hadMultiTouchRef.current = false;
     }
 
     draggedRef.current = false;
@@ -1204,6 +1467,34 @@ export default function Home() {
               >
                 👑
               </button>
+          )}
+
+          {isAdmin && (
+            <button
+              onClick={() => setAnimationMode(!isAnimationModeRef.current)}
+              className={`h-12 px-4 rounded-full border shadow-md font-bold transition-colors flex items-center justify-center text-xs whitespace-nowrap ${
+                isAnimationMode
+                  ? 'bg-purple-500 text-white border-purple-600 hover:bg-purple-600'
+                  : 'bg-white text-gray-800 border-gray-200 hover:bg-gray-100'
+              }`}
+              title="애니메이션 모드 ON/OFF"
+            >
+              애니메이션 {isAnimationMode ? 'ON' : 'OFF'}
+            </button>
+          )}
+
+          {isAdmin && (
+            <button
+              onClick={() => setHeatmapMode(!isHeatmapModeRef.current)}
+              className={`h-12 px-4 rounded-full border shadow-md font-bold transition-colors flex items-center justify-center text-xs whitespace-nowrap ${
+                isHeatmapMode
+                  ? 'bg-red-500 text-white border-red-600 hover:bg-red-600'
+                  : 'bg-white text-gray-800 border-gray-200 hover:bg-gray-100'
+              }`}
+              title="히트맵 모드 ON/OFF"
+            >
+              히트맵 {isHeatmapMode ? 'ON' : 'OFF'}
+            </button>
           )}
 
           {session ? (
@@ -1581,6 +1872,12 @@ export default function Home() {
               }`}
           />
 
+          {isAdmin && isAnimationMode && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 bg-black/70 text-white px-4 py-2 rounded-full text-xs font-bold pointer-events-none">
+              애니메이션 재생 중 · {Math.round(animationProgress * 100)}%
+            </div>
+          )}
+
           {isAdmin && selectedObjectId && (() => {
             const selectedObject = objects.find((o) => o._id === selectedObjectId);
 
@@ -1654,10 +1951,18 @@ export default function Home() {
           >
             <div
               ref={palettePanelRef}
-              className="relative flex items-center justify-center bg-white/90 backdrop-blur-lg shadow-2xl border border-gray-200 rounded-2xl md:rounded-3xl p-3 overflow-visible box-border"
-              style={{
-                width: 'min(380px, calc(100vw - 1rem))'
-              }}
+              className={`relative flex items-center justify-center bg-white/90 backdrop-blur-lg shadow-2xl border border-gray-200 rounded-2xl md:rounded-3xl overflow-visible box-border ${
+                isPaintMode ? 'p-3' : 'p-2'
+              }`}
+              style={
+                isPaintMode
+                  ? {
+                      width: 'min(380px, calc(100vw - 1rem))'
+                    }
+                  : {
+                      width: 'fit-content'
+                    }
+              }
             >
               {isPaintMode && (
                 <button
@@ -1676,9 +1981,9 @@ export default function Home() {
               {!isPaintMode && (
                   <button
                       onClick={() => session ? setIsPaintMode(true) : signIn('google')}
-                      className="px-5 py-2.5 rounded-full font-bold transition-transform hover:scale-105 active:scale-95 whitespace-nowrap bg-blue-500 text-white shadow-md"
+                      className="px-5 py-3 rounded-full font-bold transition-transform hover:scale-105 active:scale-95 whitespace-nowrap bg-blue-500 text-white shadow-md"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-brush" viewBox="0 0 16 16">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" className="bi bi-brush" viewBox="0 0 16 16">
                       <path d="M15.825.12a.5.5 0 0 1 .132.584c-1.53 3.43-4.743 8.17-7.095 10.64a6.1 6.1 0 0 1-2.373 1.534c-.018.227-.06.538-.16.868-.201.659-.667 1.479-1.708 1.74a8.1 8.1 0 0 1-3.078.132 4 4 0 0 1-.562-.135 1.4 1.4 0 0 1-.466-.247.7.7 0 0 1-.204-.288.62.62 0 0 1 .004-.443c.095-.245.316-.38.461-.452.394-.197.625-.453.867-.826.095-.144.184-.297.287-.472l.117-.198c.151-.255.326-.54.546-.848.528-.739 1.201-.925 1.746-.896q.19.012.348.048c.062-.172.142-.38.238-.608.261-.619.658-1.419 1.187-2.069 2.176-2.67 6.18-6.206 9.117-8.104a.5.5 0 0 1 .596.04M4.705 11.912a1.2 1.2 0 0 0-.419-.1c-.246-.013-.573.05-.879.479-.197.275-.355.532-.5.777l-.105.177c-.106.181-.213.362-.32.528a3.4 3.4 0 0 1-.76.861c.69.112 1.736.111 2.657-.12.559-.139.843-.569.993-1.06a3 3 0 0 0 .126-.75zm1.44.026c.12-.04.277-.1.458-.183a5.1 5.1 0 0 0 1.535-1.1c1.9-1.996 4.412-5.57 6.052-8.631-2.59 1.927-5.566 4.66-7.302 6.792-.442.543-.795 1.243-1.042 1.826-.121.288-.214.54-.275.72v.001l.575.575zm-4.973 3.04.007-.005zm3.582-3.043.002.001h-.002z"/>
                     </svg>
                   </button>
