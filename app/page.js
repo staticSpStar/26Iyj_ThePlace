@@ -36,7 +36,6 @@ export default function Home() {
   const [isAnimationMode, setIsAnimationMode] = useState(false);
   const [animationProgress, setAnimationProgress] = useState(0);
 
-  const [objects, setObjects] = useState([]);
   const [pendingPixels, setPendingPixels] = useState([]);
   const [pendingPixelCount, setPendingPixelCount] = useState(0);
   const [selectedObjectId, setSelectedObjectId] = useState(null);
@@ -72,7 +71,6 @@ export default function Home() {
   const floorChangeTimerRef = useRef(null);
   const paintStartedAtRef = useRef(null);
 
-  const objectsRef = useRef([]);
   const pendingPixelsRef = useRef([]);
   const selectedObjectIdRef = useRef(null);
   const pendingMoveTargetRef = useRef(null);
@@ -90,6 +88,15 @@ export default function Home() {
   const pinchStartCenterRef = useRef({ x: 0, y: 0 });
   const pinchStartTransformRef = useRef({ x: 0, y: 0, scale: 1 });
   const hadMultiTouchRef = useRef(false);
+
+  const [objects, setObjects] = useState([]);
+  const objectsRef = useRef([]);
+
+  const [historyObjects, setHistoryObjects] = useState([]);
+  const historyObjectsRef = useRef([]);
+
+  const [selectedObject, setSelectedObject] = useState(null);
+  const selectedObjectRef = useRef(null);
 
   const paletteDragRef = useRef({
     dragging: false,
@@ -137,6 +144,10 @@ export default function Home() {
   }, [objects]);
 
   useEffect(() => {
+    historyObjectsRef.current = historyObjects;
+  }, [historyObjects]);
+
+  useEffect(() => {
     floorRef.current = floor;
   }, [floor]);
 
@@ -147,8 +158,24 @@ export default function Home() {
 
       if (json.success) {
         setObjects(json.data);
+        objectsRef.current = json.data;
       }
     } catch (e) {}
+  }, []);
+
+  const fetchHistoryObjects = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/paint?floor=${floorRef.current}&mode=history`);
+      const json = await res.json();
+
+      if (json.success) {
+        setHistoryObjects(json.data);
+        historyObjectsRef.current = json.data;
+        return json.data;
+      }
+    } catch (e) {}
+
+    return [];
   }, []);
 
   const handleFloorChange = useCallback((newFloor) => {
@@ -276,7 +303,7 @@ export default function Home() {
     transformRef.current = clampTransform(initX, initY, initScale);
   }, [clampTransform, getFitScale]);
 
-  const drawHeatmap = useCallback((ctx, width, height, sourceObjects = objectsRef.current) => {
+  const drawHeatmap = useCallback((ctx, width, height, sourceObjects = historyObjectsRef.current) => {
     const counts = new Map();
 
     sourceObjects.forEach((obj) => {
@@ -294,11 +321,9 @@ export default function Home() {
 
     counts.forEach((count, key) => {
       const [x, y] = key.split(',').map(Number);
-
       if (x < 0 || y < 0 || x >= width || y >= height) return;
 
-      const ratio = count / maxCount;
-
+      const ratio = Math.log1p(count) / Math.log1p(maxCount);
       const gray = Math.round(255 * (1 - ratio));
 
       ctx.fillStyle = `rgb(255, ${gray}, ${gray})`;
@@ -320,7 +345,7 @@ export default function Home() {
   };
 
   const getSortedObjectsForAnimation = useCallback(() => {
-    return [...objectsRef.current].sort((a, b) => {
+    return [...historyObjectsRef.current].sort((a, b) => {
       const ta = getObjectTime(a);
       const tb = getObjectTime(b);
 
@@ -510,12 +535,10 @@ export default function Home() {
       drawInsetPixelMarker(ctx, p.x, p.y, p.color, scale);
     });
 
-    if (selectedObjectIdRef.current) {
-      const obj = objectsRef.current.find(
-        (o) => o._id === selectedObjectIdRef.current
-      );
+    if (selectedObjectRef.current) {
+      const obj = selectedObjectRef.current;
 
-      if (obj) {
+      if (obj?.pixels?.length) {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
 
         obj.pixels.forEach((p) => {
@@ -685,17 +708,18 @@ export default function Home() {
     requestRender();
   };
 
-  const setAnimationMode = (nextMode) => {
+  const setAnimationMode = async (nextMode) => {
     if (!isAdmin) return;
 
-    setIsAnimationMode(nextMode);
-    isAnimationModeRef.current = nextMode;
-
     if (nextMode) {
+      await fetchHistoryObjects();
+
       setIsPaintMode(false);
 
       setSelectedObjectId(null);
       selectedObjectIdRef.current = null;
+      setSelectedObject(null);
+      selectedObjectRef.current = null;
 
       hoverPixelRef.current = null;
 
@@ -707,23 +731,30 @@ export default function Home() {
       setAnimationProgress(0);
     }
 
+    setIsAnimationMode(nextMode);
+    isAnimationModeRef.current = nextMode;
+
     requestRender();
   };
 
-  const setHeatmapMode = (nextMode) => {
+  const setHeatmapMode = async (nextMode) => {
     if (!isAdmin) return;
 
-    setIsHeatmapMode(nextMode);
-    isHeatmapModeRef.current = nextMode;
-
     if (nextMode) {
+      await fetchHistoryObjects();
+
       setIsPaintMode(false);
 
       setSelectedObjectId(null);
       selectedObjectIdRef.current = null;
+      setSelectedObject(null);
+      selectedObjectRef.current = null;
 
       hoverPixelRef.current = null;
     }
+
+    setIsHeatmapMode(nextMode);
+    isHeatmapModeRef.current = nextMode;
 
     requestRender();
   };
@@ -1347,7 +1378,23 @@ export default function Home() {
     updateHoverPixelFromClient(e.clientX, e.clientY);
   };
 
-  const handlePointerUp = (e) => {
+  const fetchObjectAtPixel = async (targetFloor, x, y) => {
+    try {
+      const res = await fetch(
+        `/api/paint/object-at?floor=${targetFloor}&x=${x}&y=${y}`
+      );
+
+      const json = await res.json();
+
+      if (json.success) {
+        return json.data;
+      }
+    } catch (e) {}
+
+    return null;
+  };
+
+  const handlePointerUp = async (e) => {
     if (!isImageLoaded) return;
 
     const wasPinching = isPinchingRef.current;
@@ -1392,33 +1439,28 @@ export default function Home() {
         if (isPaintMode) {
           paintPixel(pixelX, pixelY, color);
         } else if (isAdmin && !isHeatmapModeRef.current) {
-          let clickedId = null;
+          const obj = await fetchObjectAtPixel(floorRef.current, pixelX, pixelY);
 
-          for (let i = objectsRef.current.length - 1; i >= 0; i--) {
-            const obj = objectsRef.current[i];
+          if (obj) {
+            setSelectedObject(obj);
+            selectedObjectRef.current = obj;
 
-            if (obj.pixels.find((p) => p.x === pixelX && p.y === pixelY)) {
-              clickedId = obj._id;
-              break;
-            }
-          }
+            setSelectedObjectId(obj._id);
+            selectedObjectIdRef.current = obj._id;
 
-          if (clickedId !== selectedObjectIdRef.current) {
-            setSelectedObjectId(clickedId);
-            selectedObjectIdRef.current = clickedId;
-
-            if (clickedId) {
-              setTooltipPos({
-                x: e.clientX,
-                y: e.clientY
-              });
-            }
+            setTooltipPos({
+              x: e.clientX,
+              y: e.clientY
+            });
           } else {
+            setSelectedObject(null);
+            selectedObjectRef.current = null;
+
             setSelectedObjectId(null);
             selectedObjectIdRef.current = null;
           }
 
-          requestRender();
+          requestOverlayRender();
         }
       }
     }
@@ -1553,17 +1595,17 @@ export default function Home() {
   };
 
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const canvas = overlayCanvasRef.current;
 
-    if (canvas) {
-      canvas.addEventListener('wheel', handleWheel, {
-        passive: false
-      });
+    if (!canvas) return;
 
-      return () => {
-        canvas.removeEventListener('wheel', handleWheel);
-      };
-    }
+    canvas.addEventListener('wheel', handleWheel, {
+      passive: false
+    });
+
+    return () => {
+      canvas.removeEventListener('wheel', handleWheel);
+    };
   }, [handleWheel]);
 
   return (
@@ -2033,60 +2075,54 @@ export default function Home() {
             </div>
           )}
 
-          {isAdmin && selectedObjectId && (() => {
-            const selectedObject = objects.find((o) => o._id === selectedObjectId);
+          {isAdmin && selectedObject && (
+            <div
+              className="admin-tooltip absolute z-30 bg-white/95 p-3 rounded-xl shadow-lg border border-gray-200 pointer-events-auto flex flex-col gap-2"
+              style={{
+                left: tooltipPos.x + 15,
+                top: tooltipPos.y + 15
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <div className="text-sm">
+                <p>
+                  <strong>작성자:</strong> {selectedObject.userEmail || '알수없음'}
+                </p>
 
-            if (!selectedObject) return null;
+                <p>
+                  <strong>크기:</strong> {selectedObject.pixels?.length || 0} 픽셀
+                </p>
 
-            return (
-                <div
-                    className="admin-tooltip absolute z-30 bg-white/95 p-3 rounded-xl shadow-lg border border-gray-200 pointer-events-auto flex flex-col gap-2"
-                    style={{
-                      left: tooltipPos.x + 15,
-                      top: tooltipPos.y + 15
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                >
-                  <div className="text-sm">
-                    <p>
-                      <strong>작성자:</strong> {selectedObject.userEmail || '알수없음'}
-                    </p>
+                <p>
+                  <strong>시작 시간:</strong>{' '}
+                  {selectedObject.paintStartedAt
+                    ? new Date(selectedObject.paintStartedAt).toLocaleString()
+                    : '기록 없음'}
+                </p>
 
-                    <p>
-                      <strong>크기:</strong> {selectedObject.pixels.length} 픽셀
-                    </p>
+                <p>
+                  <strong>게시 시간:</strong>{' '}
+                  {selectedObject.postedAt
+                    ? new Date(selectedObject.postedAt).toLocaleString()
+                    : '기록 없음'}
+                </p>
 
-                    <p>
-                      <strong>시작 시간:</strong>{' '}
-                      {selectedObject.paintStartedAt
-                          ? new Date(selectedObject.paintStartedAt).toLocaleString()
-                          : '기록 없음'}
-                    </p>
+                <p>
+                  <strong>소요 시간:</strong>{' '}
+                  {selectedObject.durationSeconds != null
+                    ? `${selectedObject.durationSeconds}초`
+                    : '기록 없음'}
+                </p>
+              </div>
 
-                    <p>
-                      <strong>게시 시간:</strong>{' '}
-                      {selectedObject.postedAt
-                          ? new Date(selectedObject.postedAt).toLocaleString()
-                          : '기록 없음'}
-                    </p>
-
-                    <p>
-                      <strong>소요 시간:</strong>{' '}
-                      {selectedObject.durationSeconds != null
-                          ? `${selectedObject.durationSeconds}초`
-                          : '기록 없음'}
-                    </p>
-                  </div>
-
-                  <button
-                      onClick={deleteSelected}
-                      className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded font-bold text-xs shadow-sm"
-                  >
-                    이 객체 삭제
-                  </button>
-                </div>
-            );
-          })()}
+              <button
+                onClick={deleteSelected}
+                className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded font-bold text-xs shadow-sm"
+              >
+                이 객체 삭제
+              </button>
+            </div>
+          )}
 
           <div
             className="absolute z-20 transition-opacity duration-300"
