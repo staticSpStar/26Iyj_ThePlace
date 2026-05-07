@@ -185,9 +185,9 @@ export default function Home() {
   }, [floor, fetchObjects]);
 
   useEffect(() => {
-    if (session && !localStorage.getItem('firstLoginCheck')) {
-      setShowModal(true);
-      localStorage.setItem('firstLoginCheck', 'true');
+    if (session && !localStorage.getItem('firstLoginCheck1')) {
+      setShowHelpModal(true);
+      localStorage.setItem('firstLoginCheck1', 'true');
     }
   }, [session]);
 
@@ -1255,36 +1255,36 @@ export default function Home() {
           <span className="text-xs text-gray-400 mt-1">Q(↓) E(↑)</span>
         </div>
 
-        {showModal && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-              <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full text-black mx-4">
-                <h2 className="text-2xl font-bold mb-5 text-gray-800">⚠ 읽어주세요!</h2>
+        {/*{showModal && (*/}
+        {/*    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">*/}
+        {/*      <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full text-black mx-4">*/}
+        {/*        <h2 className="text-2xl font-bold mb-5 text-gray-800">⚠ 읽어주세요!</h2>*/}
 
-                <h2 className="mb-5 text-gray-800">
-                  The Place에 오신 것을 환영합니다. 아래 사항들을 읽고, The Place를 즐겨주시면 좋겠습니다.
-                </h2>
+        {/*        <h2 className="mb-5 text-gray-800">*/}
+        {/*          The Place에 오신 것을 환영합니다. 아래 사항들을 읽고, The Place를 즐겨주시면 좋겠습니다.*/}
+        {/*        </h2>*/}
 
-                <ul className="list-disc pl-5 space-y-3 mb-8 text-gray-600">
-                  <li>
-                    The Place는 SASA의 학생들이 <a className="underline font-bold">자유롭게</a> SASA를 색칠할 수 있는 온라인 공간입니다. SASA의 공간에 여러분들의 용기, 도전, 꿈을 마음껏 표현해주세요.
-                  </li>
-                  <li>
-                    그러나 The Place는 접속한 모두가 볼 수 있는 <a className="underline font-bold">공용 캔버스</a>이기도 합니다. 이 사실에 유념하여 이용해주세요. 관리자는 부적절한 그림을 삭제할 수 있습니다!
-                  </li>
-                  <li>
-                    모두 확인하였다면, 아래 '확인했습니다' 버튼을 누르고 The Place 이용을 시작해주세요.
-                  </li>
-                </ul>
+        {/*        <ul className="list-disc pl-5 space-y-3 mb-8 text-gray-600">*/}
+        {/*          <li>*/}
+        {/*            The Place는 SASA의 학생들이 <a className="underline font-bold">자유롭게</a> SASA를 색칠할 수 있는 온라인 공간입니다. SASA의 공간에 여러분들의 용기, 도전, 꿈을 마음껏 표현해주세요.*/}
+        {/*          </li>*/}
+        {/*          <li>*/}
+        {/*            그러나 The Place는 접속한 모두가 볼 수 있는 <a className="underline font-bold">공용 캔버스</a>이기도 합니다. 이 사실에 유념하여 이용해주세요. 관리자는 부적절한 그림을 삭제할 수 있습니다!*/}
+        {/*          </li>*/}
+        {/*          <li>*/}
+        {/*            모두 확인하였다면, 아래 '확인했습니다' 버튼을 누르고 The Place 이용을 시작해주세요.*/}
+        {/*          </li>*/}
+        {/*        </ul>*/}
 
-                <button
-                    onClick={() => setShowModal(false)}
-                    className="w-full py-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-600 transition-colors shadow-sm"
-                >
-                  확인했습니다
-                </button>
-              </div>
-            </div>
-        )}
+        {/*        <button*/}
+        {/*            onClick={() => setShowModal(false)}*/}
+        {/*            className="w-full py-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-600 transition-colors shadow-sm"*/}
+        {/*        >*/}
+        {/*          확인했습니다*/}
+        {/*        </button>*/}
+        {/*      </div>*/}
+        {/*    </div>*/}
+        {/*)}*/}
 
         {showHelpModal && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1311,13 +1311,38 @@ export default function Home() {
                 <div className="p-6 overflow-y-auto flex-1 min-h-0 space-y-7">
                   <section>
                     <h3 className="text-xl font-black mb-3 flex items-center gap-2">
+                      ⚠️ 안내 사항
+                    </h3>
+
+                    <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
+                      <li>
+                        The Place는 모두가 함께 보는 공용 캔버스입니다.
+                        다른 사람이 불쾌감을 느낄 수 있는 그림이나 글은 남기지 말아 주세요.
+                      </li>
+                      <li>
+                        관리자는 부적절한 그림을 삭제할 수 있습니다.
+                      </li>
+                      <li>
+                        SASA의 공간에 여러분의 <strong>용기, 도전, 꿈</strong>을 <strong>그림</strong>을 통해 자유롭게 표현해 주세요.
+                      </li>
+                      <li>
+                        본 프로젝트는 <a href="https://wplace.live/" className="underline hover:text-blue-500"> Wplace</a>를 모티브로 하여 제작되었습니다.
+                      </li>
+                    </ul>
+                  </section>
+
+                  <section>
+                    <h3 className="text-xl font-black mb-3 flex items-center gap-2">
                       🎨 그리기
                     </h3>
 
                     <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
                       <li>
                         화면 하단의 <strong>그리기</strong> 버튼을 눌러 그리기를 시작하세요.
-                        팔레트에 있는 다양한 색을 선택해 학교 공간 위에 그림을 그릴 수 있습니다.
+                        팔레트에 있는 다양한 색을 선택해 학교 공간 위에 <strong>그림</strong>을 그릴 수 있습니다.
+                      </li>
+                      <li>
+                        팔레트의 왼쪽 위 ⋮⋮ 버튼을 드래그하여 팔레트를 원하는 위치로 옮길 수 있습니다.
                       </li>
                       <li>
                         원하는 위치를 클릭하거나 드래그하면 픽셀 단위로 색을 칠할 수 있습니다.
@@ -1383,25 +1408,6 @@ export default function Home() {
                       </li>
                       <li>
                         리더보드 결과에 따라 추후 상품이 증정될 예정입니다.
-                      </li>
-                    </ul>
-                  </section>
-
-                  <section>
-                    <h3 className="text-xl font-black mb-3 flex items-center gap-2">
-                      ⚠️ 이용 안내
-                    </h3>
-
-                    <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
-                      <li>
-                        The Place는 모두가 함께 보는 공용 캔버스입니다.
-                        다른 사람이 불쾌감을 느낄 수 있는 그림이나 글은 남기지 말아 주세요.
-                      </li>
-                      <li>
-                        관리자는 부적절한 그림을 삭제할 수 있습니다.
-                      </li>
-                      <li>
-                        SASA의 공간에 여러분의 <strong>용기, 도전, 꿈</strong>을 자유롭게 표현해 주세요.
                       </li>
                     </ul>
                   </section>
