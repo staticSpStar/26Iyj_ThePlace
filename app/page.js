@@ -37,7 +37,7 @@ export default function Home() {
   const [pendingPixels, setPendingPixels] = useState([]);
   const [selectedObjectId, setSelectedObjectId] = useState(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
-  const [floor, setFloor] = useState(1);
+  const [floor, setFloor] = useState(5);
   const [isFading, setIsFading] = useState(false);
 
   const [leaderboardType, setLeaderboardType] = useState(null);
