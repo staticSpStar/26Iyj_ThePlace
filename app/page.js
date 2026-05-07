@@ -24,6 +24,9 @@ export default function Home() {
   const imageSizeRef = useRef({ width: 1000, height: 1000 });
   const palettePanelRef = useRef(null);
 
+  const overlayCanvasRef = useRef(null);
+  const pendingCountUpdateRef = useRef(null);
+
   const [color, setColorState] = useState(PALETTE[6]);
   const [customColor, setCustomColor] = useState("#E50000");
   const [isEraserMode, setIsEraserMode] = useState(false);
@@ -35,6 +38,7 @@ export default function Home() {
 
   const [objects, setObjects] = useState([]);
   const [pendingPixels, setPendingPixels] = useState([]);
+  const [pendingPixelCount, setPendingPixelCount] = useState(0);
   const [selectedObjectId, setSelectedObjectId] = useState(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [floor, setFloor] = useState(1);
@@ -57,6 +61,9 @@ export default function Home() {
   const isHeatmapModeRef = useRef(false);
   const hoverPixelRef = useRef(null);
   const animationFrameRef = useRef(null);
+  const mainRenderRequestRef = useRef(null);
+  const overlayRenderRequestRef = useRef(null);
+  const renderRequestRef = useRef(null);
   const isAnimationModeRef = useRef(false);
   const animationProgressRef = useRef(0);
   const animationStartedAtRef = useRef(0);
@@ -91,6 +98,15 @@ export default function Home() {
     startLeft: 0,
     startTop: 0
   });
+
+  const requestPendingCountUpdate = useCallback(() => {
+    if (pendingCountUpdateRef.current) return;
+
+    pendingCountUpdateRef.current = requestAnimationFrame(() => {
+      pendingCountUpdateRef.current = null;
+      setPendingPixelCount(pendingPixelsRef.current.length);
+    });
+  }, []);
 
   const isWhiteBackgroundPixel = useCallback((px, py) => {
     if (!bgImageRef.current) return false;
@@ -154,6 +170,7 @@ export default function Home() {
 
       setPendingPixels([]);
       pendingPixelsRef.current = [];
+      setPendingPixelCount(0);
 
       setSelectedObjectId(null);
       selectedObjectIdRef.current = null;
@@ -187,7 +204,7 @@ export default function Home() {
 
   useEffect(() => {
     fetchObjects();
-    const interval = setInterval(fetchObjects, 5000);
+    const interval = setInterval(fetchObjects, 30000);
     return () => clearInterval(interval);
   }, [fetchObjects]);
 
@@ -433,108 +450,154 @@ export default function Home() {
     );
   };
 
-    const render = useCallback(() => {
-      const canvas = canvasRef.current;
-      if (!canvas || !dataCanvasRef.current || !bgImageRef.current) return;
+  const renderMain = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !dataCanvasRef.current || !bgImageRef.current) return;
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-      ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = 1.0;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const { x, y, scale } = transformRef.current;
+    const { width, height } = imageSizeRef.current;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+
+    if (isHeatmapModeRef.current) {
+      ctx.globalAlpha = 0.25;
+      ctx.drawImage(bgImageRef.current, 0, 0, width, height);
       ctx.globalAlpha = 1.0;
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawHeatmap(ctx, width, height);
+    } else {
+      ctx.drawImage(bgImageRef.current, 0, 0, width, height);
 
-      const { x, y, scale } = transformRef.current;
+      if (isAnimationModeRef.current) {
+        drawAnimationFrame(ctx, animationProgressRef.current);
+      } else {
+        ctx.drawImage(dataCanvasRef.current, 0, 0);
+      }
+    }
 
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.scale(scale, scale);
+    ctx.restore();
+  }, [drawHeatmap, drawAnimationFrame]);
 
-      const { width, height } = imageSizeRef.current;
+  const renderOverlay = useCallback(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
 
-      if (isHeatmapModeRef.current) {
-        ctx.globalAlpha = 0.25;
-        ctx.drawImage(bgImageRef.current, 0, 0, width, height);
-        ctx.globalAlpha = 1.0;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-        if (isAnimationModeRef.current) {
-          const visibleObjects = getAnimatedVisibleObjects(animationProgressRef.current);
-          drawHeatmap(ctx, width, height, visibleObjects);
-        } else {
-          drawHeatmap(ctx, width, height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = 1.0;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const { x, y, scale } = transformRef.current;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+
+    pendingPixelsRef.current.forEach((p) => {
+      drawInsetPixelMarker(ctx, p.x, p.y, p.color, scale);
+    });
+
+    if (selectedObjectIdRef.current) {
+      const obj = objectsRef.current.find(
+        (o) => o._id === selectedObjectIdRef.current
+      );
+
+      if (obj) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+
+        obj.pixels.forEach((p) => {
+          ctx.fillRect(p.x, p.y, 1, 1);
+        });
+
+        ctx.strokeStyle = 'white';
+        const prevLineWidth = ctx.lineWidth;
+        ctx.lineWidth = 2 / scale;
+
+        ctx.beginPath();
+
+        obj.pixels.forEach((p) => {
+          ctx.rect(p.x, p.y, 1, 1);
+        });
+
+        ctx.stroke();
+        ctx.lineWidth = prevLineWidth;
+      }
+    }
+
+    if (hoverPixelRef.current && !isHeatmapModeRef.current) {
+      const { x: hx, y: hy } = hoverPixelRef.current;
+
+      if (isPaintModeRef.current) {
+        if (floorRef.current === 1 || !isWhiteBackgroundPixel(hx, hy)) {
+          if (isEraserModeRef.current) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.fillRect(hx, hy, 1, 1);
+
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
+            const t = Math.max(0.08, Math.min(0.18, 1 / scale));
+
+            ctx.fillRect(hx, hy, 1, t);
+            ctx.fillRect(hx, hy + 1 - t, 1, t);
+            ctx.fillRect(hx, hy, t, 1);
+            ctx.fillRect(hx + 1 - t, hy, t, 1);
+          } else {
+            drawInsetPixelMarker(ctx, hx, hy, colorRef.current, scale);
+          }
         }
       } else {
-        ctx.globalAlpha = 1.0;
-        ctx.drawImage(bgImageRef.current, 0, 0, width, height);
-
-        if (isAnimationModeRef.current) {
-          drawAnimationFrame(ctx, animationProgressRef.current);
-        } else {
-          ctx.drawImage(dataCanvasRef.current, 0, 0);
-        }
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.fillRect(hx, hy, 1, 1);
       }
+    }
 
-      pendingPixelsRef.current.forEach((p) => {
-        drawInsetPixelMarker(ctx, p.x, p.y, p.color, scale);
-      });
+    ctx.restore();
+  }, [isWhiteBackgroundPixel]);
 
-      if (selectedObjectIdRef.current) {
-        const obj = objectsRef.current.find(
-          (o) => o._id === selectedObjectIdRef.current
-        );
+  const render = useCallback(() => {
+    renderMain();
+    renderOverlay();
+  }, [renderMain, renderOverlay]);
 
-        if (obj) {
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+  const requestMainRender = useCallback(() => {
+    if (mainRenderRequestRef.current) return;
 
-          obj.pixels.forEach((p) => {
-            ctx.fillRect(p.x, p.y, 1, 1);
-          });
+    mainRenderRequestRef.current = requestAnimationFrame(() => {
+      mainRenderRequestRef.current = null;
+      renderMain();
+    });
+  }, [renderMain]);
 
-          ctx.strokeStyle = 'white';
+  const requestOverlayRender = useCallback(() => {
+    if (overlayRenderRequestRef.current) return;
 
-          const prevLineWidth = ctx.lineWidth;
-          ctx.lineWidth = 2 / scale;
+    overlayRenderRequestRef.current = requestAnimationFrame(() => {
+      overlayRenderRequestRef.current = null;
+      renderOverlay();
+    });
+  }, [renderOverlay]);
 
-          ctx.beginPath();
+  const requestRender = useCallback(() => {
+    if (renderRequestRef.current) return;
 
-          obj.pixels.forEach((p) => {
-            ctx.rect(p.x, p.y, 1, 1);
-          });
-
-          ctx.stroke();
-          ctx.lineWidth = prevLineWidth;
-        }
-      }
-
-      if (hoverPixelRef.current) {
-        const { x: hx, y: hy } = hoverPixelRef.current;
-
-        if (isPaintModeRef.current) {
-          if (floorRef.current === 1 || !isWhiteBackgroundPixel(hx, hy)) {
-            if (isEraserModeRef.current) {
-              ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-              ctx.fillRect(hx, hy, 1, 1);
-
-              ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
-              const t = Math.max(0.08, Math.min(0.18, 1 / scale));
-
-              ctx.fillRect(hx, hy, 1, t);
-              ctx.fillRect(hx, hy + 1 - t, 1, t);
-              ctx.fillRect(hx, hy, t, 1);
-              ctx.fillRect(hx + 1 - t, hy, t, 1);
-            } else {
-              drawInsetPixelMarker(ctx, hx, hy, colorRef.current, scale);
-            }
-          }
-        } else {
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-          ctx.fillRect(hx, hy, 1, 1);
-        }
-      }
-
-      ctx.restore();
-    }, [isWhiteBackgroundPixel, drawHeatmap, drawAnimationFrame, getAnimatedVisibleObjects]);
+    renderRequestRef.current = requestAnimationFrame(() => {
+      renderRequestRef.current = null;
+      renderMain();
+      renderOverlay();
+    });
+  }, [renderMain, renderOverlay]);
 
   const updateHoverPixelFromClient = useCallback((clientX, clientY) => {
     const canvas = canvasRef.current;
@@ -553,12 +616,18 @@ export default function Home() {
     const { width, height } = imageSizeRef.current;
 
     if (pixelX >= 0 && pixelX < width && pixelY >= 0 && pixelY < height) {
+      const prev = hoverPixelRef.current;
+
+      if (prev && prev.x === pixelX && prev.y === pixelY) {
+        return prev;
+      }
+
       hoverPixelRef.current = {
         x: pixelX,
         y: pixelY
       };
 
-      render();
+      requestOverlayRender();
 
       return {
         x: pixelX,
@@ -566,11 +635,13 @@ export default function Home() {
       };
     }
 
-    hoverPixelRef.current = null;
-    render();
+    if (hoverPixelRef.current !== null) {
+      hoverPixelRef.current = null;
+      requestOverlayRender();
+    }
 
     return null;
-  }, [render]);
+  }, [requestOverlayRender]);
 
   const setColor = (c) => {
     setIsEraserMode(false);
@@ -578,7 +649,7 @@ export default function Home() {
 
     setColorState(c);
     colorRef.current = c;
-    render();
+    requestOverlayRender();
   };
 
   const setEraserMode = () => {
@@ -587,7 +658,7 @@ export default function Home() {
     setIsEraserMode(nextMode);
     isEraserModeRef.current = nextMode;
 
-    render();
+    requestOverlayRender();
   };
 
   const setIsPaintMode = (m) => {
@@ -605,11 +676,13 @@ export default function Home() {
     if (!m) {
       setPendingPixels([]);
       pendingPixelsRef.current = [];
+      setPendingPixelCount(0);
+
       paintStartedAtRef.current = null;
       setPalettePos(null);
     }
 
-    render();
+    requestRender();
   };
 
   const setAnimationMode = (nextMode) => {
@@ -634,7 +707,7 @@ export default function Home() {
       setAnimationProgress(0);
     }
 
-    render();
+    requestRender();
   };
 
   const setHeatmapMode = (nextMode) => {
@@ -652,7 +725,7 @@ export default function Home() {
       hoverPixelRef.current = null;
     }
 
-    render();
+    requestRender();
   };
 
   const handlePaletteHandlePointerDown = (e) => {
@@ -796,6 +869,8 @@ export default function Home() {
       if (data.success) {
         setPendingPixels([]);
         pendingPixelsRef.current = [];
+        setPendingPixelCount(0);
+
         paintStartedAtRef.current = null;
         setIsPaintMode(false);
         fetchObjects();
@@ -884,7 +959,7 @@ export default function Home() {
 
       setAnimationProgress(progress);
 
-      render();
+      requestRender();
 
       animationFrameLoopRef.current = requestAnimationFrame(tick);
     };
@@ -901,17 +976,41 @@ export default function Home() {
   }, [isAnimationMode, render]);
 
   useEffect(() => {
+    return () => {
+      if (renderRequestRef.current) {
+        cancelAnimationFrame(renderRequestRef.current);
+        renderRequestRef.current = null;
+      }
+
+      if (mainRenderRequestRef.current) {
+        cancelAnimationFrame(mainRenderRequestRef.current);
+        mainRenderRequestRef.current = null;
+      }
+
+      if (overlayRenderRequestRef.current) {
+        cancelAnimationFrame(overlayRenderRequestRef.current);
+        overlayRenderRequestRef.current = null;
+      }
+
+      if (pendingCountUpdateRef.current) {
+        cancelAnimationFrame(pendingCountUpdateRef.current);
+        pendingCountUpdateRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!isAdmin && isHeatmapModeRef.current) {
       setIsHeatmapMode(false);
       isHeatmapModeRef.current = false;
-      render();
+      requestRender();
     }
   }, [isAdmin, render]);
 
   useEffect(() => {
     const animate = () => {
       if (isPaintModeRef.current) {
-        render();
+        requestRender();
         animationFrameRef.current = requestAnimationFrame(animate);
       }
     };
@@ -940,6 +1039,18 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [activeLeaderboardTab, leaderboardType]);
 
+  const drawObjectToDataCanvas = useCallback((obj) => {
+    if (!dataCanvasRef.current || !obj?.pixels) return;
+
+    const dctx = dataCanvasRef.current.getContext('2d');
+    if (!dctx) return;
+
+    obj.pixels.forEach((p) => {
+      dctx.fillStyle = p.color;
+      dctx.fillRect(p.x, p.y, 1, 1);
+    });
+  }, []);
+
   const redrawDataCanvas = useCallback(() => {
     if (!dataCanvasRef.current || !bgImageRef.current) return;
 
@@ -961,8 +1072,8 @@ export default function Home() {
 
   useEffect(() => {
     redrawDataCanvas();
-    render();
-  }, [objects, redrawDataCanvas, render]);
+    requestRender();
+  }, [objects, redrawDataCanvas, requestRender]);
 
   const moveToPixel = useCallback((targetFloor, targetX, targetY) => {
     pendingMoveTargetRef.current = {
@@ -987,7 +1098,7 @@ export default function Home() {
     const newY = canvas.height / 2 - targetY * targetScale;
 
     transformRef.current = clampTransform(newX, newY, targetScale);
-    render();
+    requestRender();
 
     pendingMoveTargetRef.current = null;
   }, [handleFloorChange, clampTransform, render]);
@@ -1034,7 +1145,7 @@ export default function Home() {
         pendingMoveTargetRef.current = null;
       }
 
-      render();
+      requestRender();
     };
   }, [floor, redrawDataCanvas, render, resetTransformToImage]);
 
@@ -1043,8 +1154,14 @@ export default function Home() {
 
     const resize = () => {
       if (canvasRef.current && containerRef.current) {
-        canvasRef.current.width = containerRef.current.clientWidth;
-        canvasRef.current.height = containerRef.current.clientHeight;
+        const w = containerRef.current.clientWidth;
+        const h = containerRef.current.clientHeight;
+        
+        canvasRef.current.width = w;
+        canvasRef.current.height = h;
+
+        overlayCanvasRef.current.width = w;
+        overlayCanvasRef.current.height = h;
 
         const { width, height } = imageSizeRef.current;
         const { x, y, scale } = transformRef.current;
@@ -1059,7 +1176,7 @@ export default function Home() {
           transformRef.current = clampTransform(x, y, scale);
         }
 
-        render();
+        requestRender();
       }
     };
 
@@ -1078,7 +1195,7 @@ export default function Home() {
       y: e.clientY
     });
 
-    canvasRef.current.setPointerCapture(e.pointerId);
+    e.currentTarget.setPointerCapture(e.pointerId);
 
     if (pointersRef.current.size >= 2) {
       isPinchingRef.current = true;
@@ -1111,7 +1228,7 @@ export default function Home() {
         ...transformRef.current
       };
 
-      render();
+      requestRender();
       return;
     }
 
@@ -1187,7 +1304,7 @@ export default function Home() {
       draggedRef.current = true;
       hadMultiTouchRef.current = true;
 
-      render();
+      requestRender();
       return;
     }
 
@@ -1205,18 +1322,26 @@ export default function Home() {
         if (pixel) {
           paintPixel(pixel.x, pixel.y, colorRef.current);
         }
+
+        lastMousePosRef.current = {
+          x: e.clientX,
+          y: e.clientY
+        };
+
+        requestOverlayRender();
+        return;
       } else {
         const { x, y, scale } = transformRef.current;
         transformRef.current = clampTransform(x + dx, y + dy, scale);
+
+        lastMousePosRef.current = {
+          x: e.clientX,
+          y: e.clientY
+        };
+
+        requestRender();
+        return;
       }
-
-      lastMousePosRef.current = {
-        x: e.clientX,
-        y: e.clientY
-      };
-
-      render();
-      return;
     }
 
     updateHoverPixelFromClient(e.clientX, e.clientY);
@@ -1230,7 +1355,7 @@ export default function Home() {
     pointersRef.current.delete(e.pointerId);
 
     try {
-      canvasRef.current.releasePointerCapture(e.pointerId);
+      e.currentTarget.releasePointerCapture(e.pointerId);
     } catch (err) {}
 
     if (pointersRef.current.size < 2) {
@@ -1246,7 +1371,7 @@ export default function Home() {
         hadMultiTouchRef.current = false;
       }
 
-      render();
+      requestRender();
       return;
     }
 
@@ -1293,7 +1418,7 @@ export default function Home() {
             selectedObjectIdRef.current = null;
           }
 
-          render();
+          requestRender();
         }
       }
     }
@@ -1361,8 +1486,8 @@ export default function Home() {
       transformRef.current = clampTransform(x, newY, scale);
     }
 
-    render();
-  }, [render, clampTransform, isImageLoaded, getFitScale]);
+    requestRender();
+  }, [requestRender, clampTransform, isImageLoaded, getFitScale]);
 
   const handlePointerOut = (e) => {
     if (e?.pointerId != null) {
@@ -1379,7 +1504,7 @@ export default function Home() {
 
     if (hoverPixelRef.current) {
       hoverPixelRef.current = null;
-      render();
+      requestOverlayRender();
     }
   };
 
@@ -1400,8 +1525,9 @@ export default function Home() {
     if (isEraserModeRef.current) {
       if (existingIdx !== -1) {
         pendingPixelsRef.current.splice(existingIdx, 1);
-        setPendingPixels([...pendingPixelsRef.current]);
-        render();
+
+        requestPendingCountUpdate();
+        requestOverlayRender();
       }
 
       return;
@@ -1422,8 +1548,8 @@ export default function Home() {
       });
     }
 
-    setPendingPixels([...pendingPixelsRef.current]);
-    render();
+    requestPendingCountUpdate();
+    requestOverlayRender();
   };
 
   useEffect(() => {
@@ -1494,6 +1620,30 @@ export default function Home() {
               title="히트맵 모드 ON/OFF"
             >
               히트맵 {isHeatmapMode ? 'ON' : 'OFF'}
+            </button>
+          )}
+
+          {isAdmin && (
+            <button
+              onClick={async () => {
+                if (!window.confirm("PixelState를 재빌드할까요?")) return;
+
+                const res = await fetch(`/api/admin/rebuild-pixel-state`, {
+                  method: "POST",
+                });
+
+                const json = await res.json();
+
+                if (json.success) {
+                  alert(`재빌드 완료: ${json.rebuilt}개 픽셀`);
+                  fetchObjects();
+                } else {
+                  alert(json.error || "재빌드 실패");
+                }
+              }}
+              className="h-12 px-4 rounded-full border shadow-md font-bold bg-black text-white text-xs whitespace-nowrap"
+            >
+              픽셀 재빌드
             </button>
           )}
 
@@ -1857,19 +2007,24 @@ export default function Home() {
             }}
         >
           <canvas
-              ref={canvasRef}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerLeave={handlePointerOut}
-              onPointerCancel={handlePointerOut}
-              className={`absolute top-0 left-0 w-full h-full touch-none ${
-                  isPaintMode
-                      ? 'cursor-crosshair'
-                      : isDraggingRef.current && !isPaintMode
-                          ? 'cursor-grabbing'
-                          : 'cursor-grab'
-              }`}
+            ref={canvasRef}
+            className="absolute top-0 left-0 w-full h-full touch-none pointer-events-none"
+          />
+
+          <canvas
+            ref={overlayCanvasRef}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerLeave={handlePointerOut}
+            onPointerCancel={handlePointerOut}
+            className={`absolute top-0 left-0 w-full h-full touch-none ${
+              isPaintMode
+                ? 'cursor-crosshair'
+                : isDraggingRef.current && !isPaintMode
+                  ? 'cursor-grabbing'
+                  : 'cursor-grab'
+            }`}
           />
 
           {isAdmin && isAnimationMode && (
@@ -2048,7 +2203,7 @@ export default function Home() {
                     </button>
                   </div>
 
-                  {pendingPixels.length > 0 && (
+                  {pendingPixelCount > 0 && (
                     <button
                       onClick={savePainting}
                       className="w-full px-6 py-3 rounded-xl font-bold transition-colors whitespace-nowrap bg-green-500 hover:bg-green-600 text-white shadow-lg"
