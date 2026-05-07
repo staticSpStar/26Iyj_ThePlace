@@ -303,6 +303,34 @@ export default function Home() {
     transformRef.current = clampTransform(initX, initY, initScale);
   }, [clampTransform, getFitScale]);
 
+  const drawHeatmapFromSnapshot = useCallback((ctx, width, height) => {
+    const snapshot = objectsRef.current[0];
+    const pixels = snapshot?.pixels || [];
+
+    if (pixels.length === 0) return;
+
+    let maxCount = 0;
+
+    pixels.forEach((p) => {
+      maxCount = Math.max(maxCount, p.editCount || 0);
+    });
+
+    if (maxCount <= 0) return;
+
+    const logMax = Math.log1p(maxCount);
+
+    pixels.forEach((p) => {
+      const count = p.editCount || 0;
+      if (count <= 0) return;
+
+      const ratio = Math.log1p(count) / logMax;
+      const gray = Math.round(255 * (1 - ratio));
+
+      ctx.fillStyle = `rgb(255, ${gray}, ${gray})`;
+      ctx.fillRect(p.x, p.y, 1, 1);
+    });
+  }, []);
+
   const drawHeatmap = useCallback((ctx, width, height, sourceObjects = historyObjectsRef.current) => {
     const counts = new Map();
 
@@ -499,7 +527,7 @@ export default function Home() {
       ctx.drawImage(bgImageRef.current, 0, 0, width, height);
       ctx.globalAlpha = 1.0;
 
-      drawHeatmap(ctx, width, height);
+      drawHeatmapFromSnapshot(ctx, width, height);
     } else {
       ctx.drawImage(bgImageRef.current, 0, 0, width, height);
 
@@ -511,7 +539,7 @@ export default function Home() {
     }
 
     ctx.restore();
-  }, [drawHeatmap, drawAnimationFrame]);
+  }, [drawHeatmapFromSnapshot, drawAnimationFrame]);
 
   const renderOverlay = useCallback(() => {
     const canvas = overlayCanvasRef.current;
