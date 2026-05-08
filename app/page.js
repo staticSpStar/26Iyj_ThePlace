@@ -54,6 +54,23 @@ export default function Home() {
   
   const [palettePos, setPalettePos] = useState(null);
 
+  const [canvasNotes, setCanvasNotes] = useState([]);
+  const [selectedNote, setSelectedNote] = useState(null);
+  const [showNoteModal, setShowNoteModal] = useState(false);
+
+  const [isNoteAddMode, setIsNoteAddMode] = useState(false);
+  const isNoteAddModeRef = useRef(false);
+
+  const [noteEditor, setNoteEditor] = useState({
+    id: null,
+    floor: 1,
+    x: 0,
+    y: 0,
+    icon: "📌",
+    title: "",
+    body: "",
+  });
+
   const colorRef = useRef(PALETTE[6]);
   const isPaintModeRef = useRef(false);
   const isEraserModeRef = useRef(false);
@@ -97,6 +114,8 @@ export default function Home() {
 
   const [selectedObject, setSelectedObject] = useState(null);
   const selectedObjectRef = useRef(null);
+
+  const canvasNotesRef = useRef([]);
 
   const paletteDragRef = useRef({
     dragging: false,
@@ -151,6 +170,18 @@ export default function Home() {
     floorRef.current = floor;
   }, [floor]);
 
+  const fetchCanvasNotes = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/canvas-note?floor=${floorRef.current}`);
+      const json = await res.json();
+
+      if (json.success) {
+        setCanvasNotes(json.data);
+        canvasNotesRef.current = json.data;
+      }
+    } catch (e) {}
+  }, []);
+
   const fetchObjects = useCallback(async () => {
     try {
       const res = await fetch(`/api/paint?floor=${floorRef.current}`);
@@ -162,6 +193,22 @@ export default function Home() {
       }
     } catch (e) {}
   }, []);
+
+  useEffect(() => {
+      fetchCanvasNotes();
+    }, [floor, fetchCanvasNotes]);
+
+    useEffect(() => {
+    fetchObjects();
+    fetchCanvasNotes();
+
+    const interval = setInterval(() => {
+      fetchObjects();
+      fetchCanvasNotes();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [fetchObjects, fetchCanvasNotes]);
 
   const fetchHistoryObjects = useCallback(async () => {
     try {
@@ -207,6 +254,10 @@ export default function Home() {
       floorChangeTimerRef.current = null;
     }, 300);
   }, []);
+
+  useEffect(() => {
+    canvasNotesRef.current = canvasNotes;
+  }, [canvasNotes]);
 
   useEffect(() => {
     return () => {
@@ -503,6 +554,52 @@ export default function Home() {
     );
   };
 
+  const drawCanvasNoteMarker = (ctx, note, scale) => {
+    const x = note.x;
+    const y = note.y;
+
+    const r = Math.max(0.9, Math.min(2.2, 18 / scale));
+
+    ctx.save();
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+    ctx.beginPath();
+    ctx.arc(x + 0.5, y + 0.5, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.8)";
+    ctx.lineWidth = Math.max(0.08, 1.5 / scale);
+    ctx.stroke();
+
+    ctx.font = `${Math.max(1.2, Math.min(2.4, 20 / scale))}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "black";
+    ctx.fillText(note.icon || "📌", x + 0.5, y + 0.5);
+
+    ctx.restore();
+  };
+
+  const findCanvasNoteAtPixel = (pixelX, pixelY) => {
+    const scale = transformRef.current.scale;
+
+    const hitRadius = Math.max(2, Math.min(8, 18 / scale));
+
+    for (let i = canvasNotesRef.current.length - 1; i >= 0; i--) {
+      const note = canvasNotesRef.current[i];
+
+      const dx = pixelX + 0.5 - (note.x + 0.5);
+      const dy = pixelY + 0.5 - (note.y + 0.5);
+
+      if (Math.hypot(dx, dy) <= hitRadius) {
+        return note;
+      }
+    }
+
+    return null;
+  };
+
   const renderMain = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !dataCanvasRef.current || !bgImageRef.current) return;
@@ -558,6 +655,14 @@ export default function Home() {
     ctx.save();
     ctx.translate(x, y);
     ctx.scale(scale, scale);
+
+    canvasNotesRef.current.forEach((note) => {
+      drawCanvasNoteMarker(ctx, note, scale);
+    });
+
+    canvasNotesRef.current.forEach((note) => {
+      drawCanvasNoteMarker(ctx, note, scale);
+    });
 
     pendingPixelsRef.current.forEach((p) => {
       drawInsetPixelMarker(ctx, p.x, p.y, p.color, scale);
@@ -938,6 +1043,93 @@ export default function Home() {
       }
     } catch (e) {
       alert('Error saving painting');
+    }
+  };
+
+  const saveCanvasNote = async () => {
+    if (!isAdmin) return;
+
+    const method = noteEditor.id ? "PATCH" : "POST";
+
+    try {
+      const res = await fetch("/api/canvas-note", {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: noteEditor.id,
+          floor: noteEditor.floor,
+          x: noteEditor.x,
+          y: noteEditor.y,
+          icon: noteEditor.icon,
+          title: noteEditor.title,
+          body: noteEditor.body,
+        }),
+      });
+
+      const json = await res.json();
+
+      if (json.success) {
+        const saved = json.data;
+
+        if (method === "POST") {
+          const next = [...canvasNotesRef.current, saved];
+          canvasNotesRef.current = next;
+          setCanvasNotes(next);
+        } else {
+          const next = canvasNotesRef.current.map((note) =>
+            note._id === saved._id ? saved : note
+          );
+
+          canvasNotesRef.current = next;
+          setCanvasNotes(next);
+        }
+
+        setSelectedNote(saved);
+        setShowNoteModal(false);
+
+        setIsNoteAddMode(false);
+        isNoteAddModeRef.current = false;
+
+        render();
+      } else {
+        alert(json.error || "설명글 저장 실패");
+      }
+    } catch (e) {
+      alert("설명글 저장 중 오류가 발생했습니다.");
+    }
+  };
+
+  const deleteCanvasNote = async () => {
+    if (!isAdmin || !noteEditor.id) return;
+
+    if (!window.confirm("이 설명글을 삭제할까요?")) return;
+
+    try {
+      const res = await fetch(`/api/canvas-note?id=${noteEditor.id}`, {
+        method: "DELETE",
+      });
+
+      const json = await res.json();
+
+      if (json.success) {
+        const next = canvasNotesRef.current.filter(
+          (note) => note._id !== noteEditor.id
+        );
+
+        canvasNotesRef.current = next;
+        setCanvasNotes(next);
+
+        setSelectedNote(null);
+        setShowNoteModal(false);
+
+        render();
+      } else {
+        alert(json.error || "설명글 삭제 실패");
+      }
+    } catch (e) {
+      alert("설명글 삭제 중 오류가 발생했습니다.");
     }
   };
 
@@ -1466,29 +1658,75 @@ export default function Home() {
       if (pixelX >= 0 && pixelX < width && pixelY >= 0 && pixelY < height) {
         if (isPaintMode) {
           paintPixel(pixelX, pixelY, color);
-        } else if (isAdmin && !isHeatmapModeRef.current) {
-          const obj = await fetchObjectAtPixel(floorRef.current, pixelX, pixelY);
-
-          if (obj) {
-            setSelectedObject(obj);
-            selectedObjectRef.current = obj;
-
-            setSelectedObjectId(obj._id);
-            selectedObjectIdRef.current = obj._id;
-
-            setTooltipPos({
-              x: e.clientX,
-              y: e.clientY
+        } else {
+          if (isAdmin && isNoteAddModeRef.current) {
+            setNoteEditor({
+              id: null,
+              floor: floorRef.current,
+              x: pixelX,
+              y: pixelY,
+              icon: "📌",
+              title: "",
+              body: "",
             });
-          } else {
-            setSelectedObject(null);
-            selectedObjectRef.current = null;
 
-            setSelectedObjectId(null);
-            selectedObjectIdRef.current = null;
+            setSelectedNote(null);
+            setShowNoteModal(true);
+
+            render();
+            return;
           }
 
-          requestOverlayRender();
+          const clickedNote = findCanvasNoteAtPixel(pixelX, pixelY);
+
+          if (clickedNote) {
+            setSelectedNote(clickedNote);
+
+            setNoteEditor({
+              id: clickedNote._id,
+              floor: clickedNote.floor,
+              x: clickedNote.x,
+              y: clickedNote.y,
+              icon: clickedNote.icon || "📌",
+              title: clickedNote.title || "",
+              body: clickedNote.body || "",
+            });
+
+            setShowNoteModal(true);
+
+            render();
+            return;
+          }
+
+          if (isAdmin && !isHeatmapModeRef.current) {
+            let clickedId = null;
+
+            for (let i = objectsRef.current.length - 1; i >= 0; i--) {
+              const obj = objectsRef.current[i];
+
+              if (obj.pixels.find((p) => p.x === pixelX && p.y === pixelY)) {
+                clickedId = obj._id;
+                break;
+              }
+            }
+
+            if (clickedId !== selectedObjectIdRef.current) {
+              setSelectedObjectId(clickedId);
+              selectedObjectIdRef.current = clickedId;
+
+              if (clickedId) {
+                setTooltipPos({
+                  x: e.clientX,
+                  y: e.clientY,
+                });
+              }
+            } else {
+              setSelectedObjectId(null);
+              selectedObjectIdRef.current = null;
+            }
+
+            render();
+          }
         }
       }
     }
@@ -1639,13 +1877,6 @@ export default function Home() {
   return (
       <div className="flex flex-col h-[100dvh] w-full bg-gray-50 text-black font-sans overflow-hidden">
         <div className="absolute top-4 right-4 z-20 flex items-center gap-3">
-          <button
-              onClick={() => openLeaderboard("user")}
-              className="w-12 h-12 bg-white hover:bg-gray-100 text-black border border-gray-200 rounded-full shadow-md font-bold transition-colors flex items-center justify-center text-lg"
-              title="리더보드"
-          >
-            🏆
-          </button>
 
           <button
               onClick={() => setShowHelpModal(true)}
@@ -1655,15 +1886,13 @@ export default function Home() {
             ?
           </button>
 
-          {isAdmin && (
-              <button
-                  onClick={() => openLeaderboard("admin")}
-                  className="w-12 h-12 bg-yellow-100 hover:bg-yellow-200 text-black border border-yellow-300 rounded-full shadow-md font-bold transition-colors flex items-center justify-center text-lg"
-                  title="관리자 리더보드"
-              >
-                👑
-              </button>
-          )}
+          <button
+              onClick={() => openLeaderboard("admin")}
+              className="w-12 h-12 bg-white hover:bg-gray-100 text-black border border-gray-200 rounded-full shadow-md font-bold transition-colors flex items-center justify-center text-lg"
+              title="통계"
+          >
+            📊
+          </button>
 
           {isAdmin && (
             <button
@@ -1695,6 +1924,32 @@ export default function Home() {
 
           {isAdmin && (
             <button
+              onClick={() => {
+                const next = !isNoteAddModeRef.current;
+
+                isNoteAddModeRef.current = next;
+                setIsNoteAddMode(next);
+
+                if (next) {
+                  setIsPaintMode(false);
+
+                  setSelectedObjectId(null);
+                  selectedObjectIdRef.current = null;
+                }
+              }}
+              className={`h-12 px-4 rounded-full border shadow-md font-bold transition-colors flex items-center justify-center text-xs whitespace-nowrap ${
+                isNoteAddMode
+                  ? "bg-emerald-500 text-white border-emerald-600 hover:bg-emerald-600"
+                  : "bg-white text-gray-800 border-gray-200 hover:bg-gray-100"
+              }`}
+              title="설명글 추가 모드"
+            >
+              설명글 {isNoteAddMode ? "ON" : "OFF"}
+            </button>
+          )}
+
+          {isAdmin && (
+            <button
               onClick={async () => {
                 if (!window.confirm("PixelState를 재빌드할까요?")) return;
 
@@ -1715,6 +1970,153 @@ export default function Home() {
             >
               픽셀 재빌드
             </button>
+          )}
+
+          {showNoteModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+              <div className="bg-white rounded-3xl shadow-2xl w-[92vw] max-w-md p-6 text-black">
+                <div className="flex items-start justify-between gap-4 mb-4">
+                  <div>
+                    <h2 className="text-xl font-black">
+                      {isAdmin ? "캔버스 설명글" : selectedNote?.title || "설명글"}
+                    </h2>
+
+                    <p className="text-xs text-gray-400 mt-1">
+                      {noteEditor.floor}층 · ({noteEditor.x}, {noteEditor.y})
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setShowNoteModal(false);
+                      setSelectedNote(null);
+                    }}
+                    className="w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 font-bold shrink-0"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {isAdmin ? (
+                  <div className="flex flex-col gap-3">
+                    <div className="grid grid-cols-[64px_1fr_1fr] gap-2">
+                      <input
+                        value={noteEditor.icon}
+                        onChange={(e) =>
+                          setNoteEditor((prev) => ({
+                            ...prev,
+                            icon: e.target.value.slice(0, 4),
+                          }))
+                        }
+                        className="px-3 py-2 rounded-xl border border-gray-200 text-sm text-center"
+                        maxLength={4}
+                        placeholder="📌"
+                      />
+
+                      <input
+                        type="number"
+                        value={noteEditor.x}
+                        onChange={(e) =>
+                          setNoteEditor((prev) => ({
+                            ...prev,
+                            x: Number(e.target.value),
+                          }))
+                        }
+                        className="px-3 py-2 rounded-xl border border-gray-200 text-sm"
+                        placeholder="x"
+                      />
+
+                      <input
+                        type="number"
+                        value={noteEditor.y}
+                        onChange={(e) =>
+                          setNoteEditor((prev) => ({
+                            ...prev,
+                            y: Number(e.target.value),
+                          }))
+                        }
+                        className="px-3 py-2 rounded-xl border border-gray-200 text-sm"
+                        placeholder="y"
+                      />
+                    </div>
+
+                    <input
+                      value={noteEditor.title}
+                      onChange={(e) =>
+                        setNoteEditor((prev) => ({
+                          ...prev,
+                          title: e.target.value.slice(0, 80),
+                        }))
+                      }
+                      className="px-3 py-2 rounded-xl border border-gray-200 text-sm"
+                      placeholder="제목"
+                      maxLength={80}
+                    />
+
+                    <textarea
+                      value={noteEditor.body}
+                      onChange={(e) =>
+                        setNoteEditor((prev) => ({
+                          ...prev,
+                          body: e.target.value.slice(0, 1000),
+                        }))
+                      }
+                      className="w-full min-h-[160px] px-3 py-2 rounded-xl border border-gray-200 text-sm resize-none outline-none focus:ring-2 focus:ring-blue-400"
+                      placeholder="설명글을 입력하세요."
+                      maxLength={1000}
+                    />
+
+                    <div className="text-[10px] text-right text-gray-400">
+                      {noteEditor.body.length}/1000
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={saveCanvasNote}
+                        className="flex-1 py-3 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-bold"
+                      >
+                        저장
+                      </button>
+
+                      {noteEditor.id && (
+                        <button
+                          onClick={deleteCanvasNote}
+                          className="flex-1 py-3 rounded-xl bg-red-500 hover:bg-red-600 text-white font-bold"
+                        >
+                          삭제
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="text-4xl mb-3">
+                      {selectedNote?.icon || "📌"}
+                    </div>
+
+                    <h3 className="text-lg font-black mb-2">
+                      {selectedNote?.title || "제목 없음"}
+                    </h3>
+
+                    <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed min-h-[100px]">
+                      {selectedNote?.body?.trim()
+                        ? selectedNote.body
+                        : "등록된 설명글이 없습니다."}
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        setShowNoteModal(false);
+                        setSelectedNote(null);
+                      }}
+                      className="mt-6 w-full py-3 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-bold"
+                    >
+                      확인
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
 
           {session ? (
@@ -1820,60 +2222,6 @@ export default function Home() {
                 </div>
 
                 <div className="p-6 overflow-y-auto flex-1 min-h-0 space-y-7">
-                  <section>
-                    <h3 className="text-xl font-black mb-3 flex items-center gap-2">
-                      ⚠️ 안내 사항
-                    </h3>
-
-                    <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
-                      <li>
-                        The Place는 모두가 함께 보는 공용 캔버스입니다.
-                        다른 사람이 불쾌감을 느낄 수 있는 그림이나 글은 남기지 말아 주세요.
-                      </li>
-                      <li>
-                        관리자는 부적절한 그림을 삭제할 수 있습니다.
-                      </li>
-                      <li>
-                        SASA의 공간에 여러분의 <strong>용기, 도전, 꿈</strong>을 <strong>그림</strong>을 통해 자유롭게 표현해 주세요.
-                      </li>
-                      <li>
-                        본 프로젝트는 <a href="https://wplace.live/" className="underline hover:text-blue-500"> Wplace</a>를 모티브로 하여 제작되었습니다.
-                      </li>
-                    </ul>
-                  </section>
-
-                  <section>
-                    <h3 className="text-xl font-black mb-3 flex items-center gap-2">
-                      🎨 그리기
-                    </h3>
-
-                    <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
-                      <li>
-                        화면 하단의 <strong>그리기</strong> 버튼을 눌러 그리기를 시작하세요.
-                        팔레트에 있는 다양한 색을 선택해 학교 공간 위에 <strong>그림</strong>을 그릴 수 있습니다.
-                      </li>
-                      <li>
-                        팔레트의 왼쪽 위 ⋮⋮ 버튼을 드래그하여 팔레트를 원하는 위치로 옮길 수 있습니다.
-                      </li>
-                      <li>
-                        원하는 위치를 클릭하거나 드래그하면 픽셀 단위로 색을 칠할 수 있습니다.
-                      </li>
-                      <li>
-                        실수로 그린 부분은 팔레트의 지우개 모드를 선택하여 지울 수 있습니다.
-                      </li>
-                      <li>
-                        그리기가 끝나면 <strong>그리기 완료</strong> 버튼을 눌러 그림을 학교 공간 위에 게시하세요.
-                      </li>
-                      <li>
-                        <strong>그리기 완료</strong> 버튼을 누르지 않고 팔레트의 <strong>✕</strong> 버튼을 누르면,
-                        그리던 그림은 저장되지 않고 사라집니다.
-                      </li>
-                      <li>
-                        1층이 아닌 층에서는 배경의 흰색 영역 위에는 그림을 그릴 수 없습니다.
-                        학교 공간이 있는 부분 위에만 색칠할 수 있습니다.
-                      </li>
-                    </ul>
-                  </section>
 
                   <section>
                     <h3 className="text-xl font-black mb-3 flex items-center gap-2">
@@ -1885,10 +2233,7 @@ export default function Home() {
                         The Place의 캔버스는 <strong>학교 공간</strong>입니다.
                       </li>
                       <li>
-                        <strong>컴퓨터:</strong> Ctrl + 마우스 휠로 확대/축소, 일반 마우스 휠로 수직 이동, Shift + 마우스 휠로 수평 이동, 드래그로 자유 이동이 가능합니다.
-                      </li>
-                      <li>
-                        <strong>모바일:</strong> 두 손가락으로 화면을 벌리거나 오므려 확대/축소, 드래그로 이동이 가능합니다.
+                        Ctrl + 마우스 휠로 확대/축소, 일반 마우스 휠로 수직 이동, Shift + 마우스 휠로 수평 이동, 드래그로 자유 이동이 가능합니다.
                       </li>
                       <li>
                         화면 왼쪽 위의 층 선택 버튼을 눌러 <strong>1층부터 5층까지</strong> 수직적으로 이동할 수 있습니다.
@@ -1902,23 +2247,28 @@ export default function Home() {
 
                   <section>
                     <h3 className="text-xl font-black mb-3 flex items-center gap-2">
-                      🏆 리더보드
+                      📊 통계
                     </h3>
 
                     <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
                       <li>
-                        화면 오른쪽 위의 <strong>🏆</strong> 플로팅 버튼을 눌러 리더보드를 확인할 수 있습니다.
+                        화면 오른쪽 위의 <strong>📊</strong> 플로팅 버튼을 눌러 통계를 확인할 수 있습니다.
                       </li>
                       <li>
-                        리더보드에서는 <strong>개인별 픽셀 수</strong>, <strong>반별 픽셀 수</strong>,
-                        <strong> 학년별 픽셀 수</strong>, <strong>층별 픽셀 수</strong> 순위를 볼 수 있습니다.
+                        리더보드에서는 <strong>개인별 픽셀 수</strong>, <strong>개인별 그린 시간</strong>, <strong>개인별 픽셀/시간</strong>, <strong>반별 픽셀 수</strong>,
+                        <strong> 학년별 픽셀 수</strong>, <strong>층별 픽셀 수</strong>, <strong>위치별 수정 횟수</strong> 통계를 볼 수 있습니다.
                       </li>
+                    </ul>
+                  </section>
+
+                  <section>
+                    <h3 className="text-xl font-black mb-3 flex items-center gap-2">
+                      ⚙️ 추가 기능
+                    </h3>
+
+                    <ul className="space-y-3 text-gray-700 leading-relaxed list-disc pl-5">
                       <li>
-                        개인별 순위에서는 상위 10명과 자신의 순위를 먼저 확인할 수 있고,
-                        <strong> 전체 보기</strong> 버튼을 누르면 전체 순위를 볼 수 있습니다.
-                      </li>
-                      <li>
-                        리더보드 결과에 따라 추후 상품이 증정될 예정입니다.
+                        화면 오른쪽 위의 애니메이션 ON/OFF, 히트맵 ON/OFF를 눌러 각 모드를 활성화할 수 있습니다.
                       </li>
                     </ul>
                   </section>
@@ -1933,12 +2283,8 @@ export default function Home() {
                 <div className="flex items-start justify-between px-5 sm:px-7 py-5 border-b border-gray-100">
                   <div>
                     <h2 className="text-2xl sm:text-3xl font-black tracking-tight">
-                      {leaderboardType === "admin" ? "관리자 리더보드" : "리더보드"}
+                      통계
                     </h2>
-
-                    <p className="text-sm text-gray-500 mt-1">
-                      The Place 활동 순위
-                    </p>
                   </div>
 
                   <button
@@ -1959,7 +2305,7 @@ export default function Home() {
                     <>
                       <div className="px-4 sm:px-6 py-4 border-b border-gray-100">
                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
-                          {leaderboardType === "admin" ? (
+                          {(
                               <>
                                 <LeaderboardTabButton
                                     id="personalPixelRanking"
@@ -2006,36 +2352,6 @@ export default function Home() {
                                 <LeaderboardTabButton
                                     id="editedPixelRanking"
                                     label="수정 위치"
-                                    activeLeaderboardTab={activeLeaderboardTab}
-                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
-                                />
-                              </>
-                          ) : (
-                              <>
-                                <LeaderboardTabButton
-                                    id="personalPixelRanking"
-                                    label="개인 픽셀"
-                                    activeLeaderboardTab={activeLeaderboardTab}
-                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
-                                />
-
-                                <LeaderboardTabButton
-                                    id="classPixelRanking"
-                                    label="반별 픽셀"
-                                    activeLeaderboardTab={activeLeaderboardTab}
-                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
-                                />
-
-                                <LeaderboardTabButton
-                                    id="gradePixelRanking"
-                                    label="학년별 픽셀"
-                                    activeLeaderboardTab={activeLeaderboardTab}
-                                    setActiveLeaderboardTab={setActiveLeaderboardTab}
-                                />
-
-                                <LeaderboardTabButton
-                                    id="floorPixelRanking"
-                                    label="층별 픽셀"
                                     activeLeaderboardTab={activeLeaderboardTab}
                                     setActiveLeaderboardTab={setActiveLeaderboardTab}
                                 />
