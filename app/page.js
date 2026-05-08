@@ -1894,33 +1894,29 @@ export default function Home() {
             📊
           </button>
 
-          {isAdmin && (
-            <button
-              onClick={() => setAnimationMode(!isAnimationModeRef.current)}
-              className={`h-12 px-4 rounded-full border shadow-md font-bold transition-colors flex items-center justify-center text-xs whitespace-nowrap ${
-                isAnimationMode
-                  ? 'bg-purple-500 text-white border-purple-600 hover:bg-purple-600'
-                  : 'bg-white text-gray-800 border-gray-200 hover:bg-gray-100'
-              }`}
-              title="애니메이션 모드 ON/OFF"
-            >
-              애니메이션 {isAnimationMode ? 'ON' : 'OFF'}
-            </button>
-          )}
+          <button
+            onClick={() => setAnimationMode(!isAnimationModeRef.current)}
+            className={`h-12 px-4 rounded-full border shadow-md font-bold transition-colors flex items-center justify-center text-xs whitespace-nowrap ${
+              isAnimationMode
+                ? 'bg-purple-500 text-white border-purple-600 hover:bg-purple-600'
+                : 'bg-white text-gray-800 border-gray-200 hover:bg-gray-100'
+            }`}
+            title="애니메이션 모드 ON/OFF"
+          >
+            애니메이션 {isAnimationMode ? 'ON' : 'OFF'}
+          </button>
 
-          {isAdmin && (
-            <button
-              onClick={() => setHeatmapMode(!isHeatmapModeRef.current)}
-              className={`h-12 px-4 rounded-full border shadow-md font-bold transition-colors flex items-center justify-center text-xs whitespace-nowrap ${
-                isHeatmapMode
-                  ? 'bg-red-500 text-white border-red-600 hover:bg-red-600'
-                  : 'bg-white text-gray-800 border-gray-200 hover:bg-gray-100'
-              }`}
-              title="히트맵 모드 ON/OFF"
-            >
-              히트맵 {isHeatmapMode ? 'ON' : 'OFF'}
-            </button>
-          )}
+          <button
+            onClick={() => setHeatmapMode(!isHeatmapModeRef.current)}
+            className={`h-12 px-4 rounded-full border shadow-md font-bold transition-colors flex items-center justify-center text-xs whitespace-nowrap ${
+              isHeatmapMode
+                ? 'bg-red-500 text-white border-red-600 hover:bg-red-600'
+                : 'bg-white text-gray-800 border-gray-200 hover:bg-gray-100'
+            }`}
+            title="히트맵 모드 ON/OFF"
+          >
+            히트맵 {isHeatmapMode ? 'ON' : 'OFF'}
+          </button>
 
           {isAdmin && (
             <button
