@@ -842,7 +842,6 @@ export default function Home() {
   };
 
   const setAnimationMode = async (nextMode) => {
-    if (!isAdmin) return;
 
     if (nextMode) {
       await fetchHistoryObjects();
@@ -871,7 +870,6 @@ export default function Home() {
   };
 
   const setHeatmapMode = async (nextMode) => {
-    if (!isAdmin) return;
 
     if (nextMode) {
       await fetchHistoryObjects();
